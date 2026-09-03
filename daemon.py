@@ -21,8 +21,8 @@ functions and never leaks into the renderer.
 Layout (72x16 front display):
 
     ############################    1px per-pixel animated ring (.anim)
-    #  Fable 5 max      [##----] #  label (label_color)     | context bar
-    #  5h85% 7d97%        WORK   #  quotas                  | state word
+    #  Fable 5 max      [##----] #  label            | time-to-reset progress
+    #  W [quota bar]       WORK   #  quota remaining | state word
     ############################
 """
 
@@ -83,9 +83,8 @@ OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 #             BUSY/CUSTOM theme (on-device manual switch; see claude_card.py)
 #   "off"   - data bridge only
 RENDER_MODE = os.environ.get("BUSYBAR_RENDER_MODE", "auto")
-# Display style (env BUSYBAR_STYLE): "minimal" (text state word + quotas
-# always) or "avatar" (a pixel companion acts out the state; quotas swap
-# in only when the work is done).
+# Display style (env BUSYBAR_STYLE): "minimal" (text state word + quota
+# gauges) or "avatar" (a pixel companion acts out the state).
 STYLE = os.environ.get("BUSYBAR_STYLE", "minimal")
 APP_NAME = "claude_status"   # canvas app name; .anim assets live under it
 DRAW_PRIORITY = 50
@@ -125,11 +124,6 @@ AVATAR_ANIMS = {
 }
 AVATAR_X, AVATAR_Y = 55, 1
 
-# Badge glyphs drawn after the label (protocol field "badges").
-# Rows of (x_offset, width) pixel runs; 4x7 lightning bolt for "fast".
-BADGE_GLYPHS = {
-    "fast": ("#FFD21EFF", [(2, 2), (1, 2), (0, 4), (2, 2), (1, 2), (0, 2), (0, 1)]),
-}
 STATE_COLORS = {
     "THINKING": "#AF87FFFF", "WORKING": "#FFB000FF", "WAIT": "#FF6A00FF",
     "ERROR": "#FF2020FF", "FAILED": "#FF2020FF", "COMPLETE": "#20C040FF",
@@ -147,6 +141,8 @@ FONT = "small"
 BAR_X, BAR_Y, BAR_W, BAR_H = 50, 3, 20, 4
 BAR_TRACK_COLOR = "#262626FF"
 LABEL_MAX_PX = BAR_X - 2 - 3
+QUOTA_BAR_X, QUOTA_BAR_Y, QUOTA_BAR_W, QUOTA_BAR_H = 10, 10, 35, 4
+WEEK_SECONDS = 7 * 24 * 60 * 60
 
 
 # --------------------------------------------------------------------------
@@ -646,7 +642,8 @@ def status_snapshot() -> dict:
         # A quota window whose reset time has passed is back to full.
         if q.get("resets_at") and q["resets_at"] <= now:
             left = 100
-        quotas.append({"name": q.get("name", ""), "left_pct": left})
+        quotas.append({"name": q.get("name", ""), "left_pct": left,
+                       "resets_at": q.get("resets_at")})
     return {
         "source": sess["source"],
         "state": effective_state(sess),
@@ -775,12 +772,26 @@ def bar_color(used: float) -> str:
     return "#20C040FF"
 
 
-def quota_color(left: int) -> str:
+def quota_bar_color(left: float) -> str:
     if left <= 10:
         return "#FF2020FF"
     if left <= 25:
         return "#FF6A00FF"
-    return QUOTA_COLOR
+    if left <= 50:
+        return "#FFB000FF"
+    return "#20C040FF"
+
+
+def week_progress_pct(quota: dict | None, now: float | None = None) -> float | None:
+    """How far the current seven-day window has advanced toward its reset."""
+    if not quota or not isinstance(quota.get("resets_at"), (int, float)):
+        return None
+    now = time.time() if now is None else now
+    seconds_left = quota["resets_at"] - now
+    if seconds_left <= 0:
+        return 0.0
+    seconds_left = min(WEEK_SECONDS, seconds_left)
+    return 100.0 * (1.0 - seconds_left / WEEK_SECONDS)
 
 
 def _norm_color(c, fallback: str) -> str:
@@ -802,9 +813,12 @@ def _text(eid, x, y, align, text, color):
             "text": text, "font": FONT, "color": color, "timeout": TEXT_TIMEOUT_S}
 
 
-def anim_element(state: str) -> dict:
+def anim_element(state: str, badges=None) -> dict:
+    path = STATE_ANIMS.get(state, "idle.anim")
+    if state == "WORKING" and "fast" in (badges or []):
+        path = "work_fast.anim"
     return {"id": "ring", "type": "animation", "display": "front",
-            "x": 0, "y": 0, "path": STATE_ANIMS.get(state, "idle.anim"),
+            "x": 0, "y": 0, "path": path,
             "loop": True, "timeout": ANIM_TIMEOUT_S}
 
 
@@ -815,22 +829,8 @@ def avatar_element(state: str) -> dict:
             "loop": True, "timeout": ANIM_TIMEOUT_S}
 
 
-def badge_elements(badges, x: int) -> list[dict]:
-    """Known badge glyphs as pixel-run rectangles right of the label."""
-    elements = []
-    for badge in badges or []:
-        glyph = BADGE_GLYPHS.get(badge)
-        if not glyph:
-            continue  # unknown badge names are ignored (forward compat)
-        color, rows = glyph
-        for j, (dx, w) in enumerate(rows):
-            elements.append(_rect(f"bdg_{badge}{j}", x + dx, 2 + j, w, 1, color))
-        x += 4 + max(dx + w for dx, w in rows)
-    return elements
-
-
 def info_elements(status: dict) -> list[dict]:
-    """Text rows + context bar for a normalized snapshot (ring/avatar are
+    """Text rows + weekly gauges for a normalized snapshot (ring/avatar are
     separate animation elements)."""
     avatar = STYLE == "avatar"
     label_max = (AVATAR_X - 4 - 5) if avatar else LABEL_MAX_PX
@@ -856,38 +856,42 @@ def info_elements(status: dict) -> list[dict]:
     if kind == "text":
         x += 2 + est_width(tag)
     elements.append(_rect("hflag", 1, 2, 2, 5, tag if kind == "flag" else "#00000000"))
-    elements += badge_elements(status.get("badges"), x + 3)
-
-    used = status.get("context_pct")
+    quotas = [q for q in (status.get("quotas") or []) if q.get("left_pct") is not None]
+    weekly = next((q for q in quotas if str(q.get("name", "")).lower()
+                   in ("7d", "week", "weekly", "wk")), quotas[-1] if quotas else None)
+    week_progress = week_progress_pct(weekly)
     if avatar:
-        # vertical context gauge between the text column and the avatar
+        # Vertical week-progress gauge between the text column and avatar.
         elements.append(_rect("ctrack", AVATAR_X - 4, 1, 2, 14, BAR_TRACK_COLOR))
-        if isinstance(used, (int, float)) and used > 0:
-            fh = max(1, min(14, round(14 * min(used, 100) / 100)))
-            elements.append(_rect("cfill", AVATAR_X - 4, 15 - fh, 2, fh, bar_color(used)))
+        if week_progress is not None and week_progress > 0:
+            fh = max(1, min(14, round(14 * week_progress / 100)))
+            elements.append(_rect("cfill", AVATAR_X - 4, 15 - fh, 2, fh,
+                                  bar_color(week_progress)))
     else:
         elements.append(_rect("ctrack", BAR_X, BAR_Y, BAR_W, BAR_H, BAR_TRACK_COLOR))
-        if isinstance(used, (int, float)) and used > 0:
-            fill = max(1, min(BAR_W, round(BAR_W * min(used, 100) / 100)))
-            elements.append(_rect("cfill", BAR_X, BAR_Y, fill, BAR_H, bar_color(used)))
+        if week_progress is not None and week_progress > 0:
+            fill = max(1, min(BAR_W, round(BAR_W * week_progress / 100)))
+            elements.append(_rect("cfill", BAR_X, BAR_Y, fill, BAR_H,
+                                  bar_color(week_progress)))
 
-    quotas = [q for q in (status.get("quotas") or []) if q.get("left_pct") is not None][:2]
-    if avatar:
-        # The companion acts out the state; the bottom-left slot shows the
-        # state as a word, and swaps to quotas once the work is done.
-        if state in ("COMPLETE", "IDLE") and quotas:
-            text = " ".join(f"{q['name']}{q['left_pct']}%" for q in quotas)
-            worst = min(q["left_pct"] for q in quotas)
-            elements.append(_text("usage", 3, 15, "bottom_left", text, quota_color(worst)))
-        else:
-            elements.append(_text("usage", 3, 15, "bottom_left",
-                                  STATE_WORDS_FULL.get(state, state.lower()),
-                                  STATE_COLORS.get(state, STATE_COLORS["IDLE"])))
+    if weekly:
+        left = max(0.0, min(100.0, float(weekly["left_pct"])))
+        color = quota_bar_color(left)
+        fill = max(1, min(QUOTA_BAR_W, round(QUOTA_BAR_W * left / 100)))
+        elements.append(_text("usage", 3, 15, "bottom_left", "W", color))
+        elements.append(_rect("qtrack", QUOTA_BAR_X, QUOTA_BAR_Y,
+                              QUOTA_BAR_W, QUOTA_BAR_H, BAR_TRACK_COLOR))
+        elements.append(_rect("qfill", QUOTA_BAR_X, QUOTA_BAR_Y,
+                              fill, QUOTA_BAR_H,
+                              color if left > 0 else "#00000000"))
     else:
-        if quotas:
-            text = " ".join(f"{q['name']}{q['left_pct']}%" for q in quotas)
-            worst = min(q["left_pct"] for q in quotas)
-            elements.append(_text("usage", 3, 15, "bottom_left", text, quota_color(worst)))
+        # Keep element ids and types stable while clearing a previous quota.
+        elements.append(_text("usage", 3, 15, "bottom_left", " ", QUOTA_COLOR))
+        elements.append(_rect("qtrack", QUOTA_BAR_X, QUOTA_BAR_Y,
+                              QUOTA_BAR_W, QUOTA_BAR_H, "#00000000"))
+        elements.append(_rect("qfill", QUOTA_BAR_X, QUOTA_BAR_Y,
+                              1, QUOTA_BAR_H, "#00000000"))
+    if not avatar:
         elements.append(_text("state", 69, 15, "bottom_right",
                               STATE_WORDS.get(state, state[:5]),
                               STATE_COLORS.get(state, STATE_COLORS["IDLE"])))
@@ -963,7 +967,7 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                     # Leftovers first: a sleeping hub's frame, another style's ids.
                     transport.clear(APP_NAME)
                 status = status_snapshot()
-                anim = anim_element(status["state"])
+                anim = anim_element(status["state"], status.get("badges"))
                 if anim["path"] != last_anim or now - last_anim_ts > ANIM_REFRESH_S:
                     anims = [anim]
                     if STYLE == "avatar":

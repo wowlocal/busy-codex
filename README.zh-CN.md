@@ -17,8 +17,7 @@ macOS 直连 Bar，Windows 作为枢纽客户端经 Wi-Fi 转发；备用枢纽�
   ![minimal](docs/img/working.png)
 
 - **`avatar`**——1:1 复刻终端 Clawd 的像素小形象在右侧演出状态（打字带
-  眨眼 / 灯泡思考 / 咖啡休息 / X 眼报错 / zzz 睡觉）+ 竖向 ctx 量条；
-  左下平时显示状态词，完工后换成配额：
+  眨眼 / 灯泡思考 / 咖啡休息 / X 眼报错 / zzz 睡觉）+ 竖向周重置进度条：
 
   ![avatar](docs/img/avatar-working.png)
 
@@ -28,13 +27,14 @@ macOS 直连 Bar，Windows 作为枢纽客户端经 Wi-Fi 转发；备用枢纽�
 
 ```
 ████████████████████████████   1px 环形灯带：预渲染 .anim 由固件原生 25fps 播放
-█  Fable 5 max      [██----] █   模型+effort（/effort 档位色）│ ctx 进度条
-█  5h88% 7d98%        WORK  █   plan 剩余（配对紧凑格式）│ 状态词（状态色）
+█  Fable 5 max      [██----] █   模型+effort │ 距离周重置的时间进度
+█  W [████████---]     WORK  █   周配额剩余进度条 │ 状态词（状态色）
 ████████████████████████████
 ```
 
 **环形动画**（固件原生播放，与内置 keep_out 主题同一解码器，丝滑度一致）：
 - WORKING — 彩虹跑马灯（Claude Code 主题 rainbow_* 七色，逐像素渐变旋转，3.2s/圈）
+- Codex fast + WORKING — 黄色高速流动轮廓，无独立徽章，避免与文字重叠
 - THINKING — effortUltra 紫双波峰行波（2s 周期）
 - COMPLETE — 绿色呼吸（2.8s；30 秒后回落 IDLE）
 - WAIT — 橙色急促脉冲（0.88s）+ 设备状态 LED 同闪
@@ -45,8 +45,8 @@ macOS 直连 Bar，Windows 作为枢纽客户端经 Wi-Fi 转发；备用枢纽�
 medium 蓝 `permission` / high 黄 `warning` / xhigh 橙 `fastMode` /
 max 紫 `effortUltra`(175,135,255)。
 
-**ctx 进度条**：20×4px，填充随占用率变色（<50 绿 / ≥50 黄 / ≥80 橙 / ≥90 红）。
-**plan 剩余**：`5h88% 7d98%` 配对格式，任一窗口 ≤25% 剩余转橙、≤10% 转红。
+**周重置进度条**：右上 20×4px，越接近重置越满（<50 绿 / ≥50 黄 / ≥80 橙 / ≥90 红）。
+**plan 剩余**：下方 `W` 进度条显示周配额余量，≤50% 黄、≤25% 橙、≤10% 红。
 
 ## 架构
 

@@ -17,8 +17,8 @@ the 72×16 front LED matrix with buttery-smooth native animations.
 
 ```
 ############################    1px per-pixel animated ring (.anim, 25 fps)
-#  Fable 5 max      [##----] #  model + effort (colored by /effort level)
-#  5h85% 7d97%        WORK   #  plan remaining · ctx bar · state word
+#  Fable 5 max      [##----] #  model + effort · progress toward weekly reset
+#  W [########---]    WORK   #  weekly quota remaining · state word
 ############################
 ```
 
@@ -28,8 +28,8 @@ the 72×16 front LED matrix with buttery-smooth native animations.
 | --- | --- |
 | **Ring animation** | Session state, played natively by the firmware's own `.anim` decoder (same one as the built-in *keep out* theme): rainbow marquee = WORKING, purple wave = THINKING, green breathing = COMPLETE, orange pulse = WAIT (+ status LED), red blink = ERROR/FAILED, dim gray = IDLE |
 | **Model + effort** | e.g. `Fable 5 max`, colored with Claude Code's own theme palette per `/effort` level (`inactive` gray / `permission` blue / `warning` yellow / `fastMode` orange / `effortUltra` purple) |
-| **Ctx bar** | Context-window usage, green → yellow → orange → red |
-| **Plan usage** | `5h85% 7d97%` — remaining % of the 5-hour and 7-day rate-limit windows; turns orange ≤25%, red ≤10% |
+| **Reset progress** | Small top-right bar fills as the seven-day window approaches its reset; green → yellow → orange → red |
+| **Plan usage** | Large `W` bar shows weekly quota remaining; it shrinks and changes from green to yellow/orange/red as capacity runs low |
 | **State word** | `THINK / WORK / WAIT / ERR / FAIL / DONE / IDLE` |
 
 ![Ring only](docs/img/ring-only.png)
@@ -103,7 +103,7 @@ reverses everything.
 Two looks, one codebase — pick with `BUSYBAR_STYLE` (persist it in an
 `env.sh` next to `daemon.py`, e.g. `export BUSYBAR_STYLE=avatar`):
 
-- **`minimal`** (default) — the layout above: state word + quotas always
+- **`minimal`** (default) — the layout above: state word + weekly gauges always
   visible.
 - **`avatar`** — a pixel companion (a 1:1 recreation of the Claude Code
   terminal mascot) acts out the state on the right: typing at a laptop
@@ -112,9 +112,8 @@ Two looks, one codebase — pick with `BUSYBAR_STYLE` (persist it in an
   gauge. The bottom-left slot shows the state as a word and swaps to
   quotas once the work is done.
 
-A Codex session in avatar style, with the `fast` badge:
-
-![Avatar + Codex fast badge](docs/img/avatar-codex-fast.png)
+For Codex `fast` mode, the separate badge is replaced by a yellow animated
+working contour so it cannot collide with text on the 72×16 display.
 
 Styles are a runtime option, not separate branches — every release
 contains both.

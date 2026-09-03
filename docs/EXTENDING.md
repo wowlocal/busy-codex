@@ -38,9 +38,9 @@ curl -X POST http://127.0.0.1:8765/v1/report -H 'Content-Type: application/json'
 | `state` | enum | no | `THINKING WORKING WAIT ERROR FAILED COMPLETE IDLE` — drives the ring animation + state word; omit to update data only |
 | `label` | string ≤64 | no | line-1 text (tool/model name); ASCII; auto-trimmed to fit |
 | `label_color` | `#RRGGBB[AA]` | no | line-1 color (default white) |
-| `context_pct` | 0–100 | no | fills the progress bar (green→yellow→orange→red) |
-| `quotas` | array | no | up to 2 rendered as `name+left%` (e.g. `5h85% 7d97%`); each `{name ≤6, left_pct 0-100, resets_at?: unix_s}` — after `resets_at` passes, shown as 100% left |
-| `badges` | array of names | no | small glyphs after the label; known: `fast` (lightning bolt). Unknown names are ignored, so reporting a badge is always safe |
+| `context_pct` | 0–100 | no | retained in the normalized status API; the front display prioritizes weekly quota gauges |
+| `quotas` | array | no | each `{name ≤6, left_pct 0-100, resets_at?: unix_s}`; the `7d` entry drives the large remaining-quota bar and the small reset-progress bar |
+| `badges` | array of names | no | known: `fast`, which selects the yellow animated working contour; unknown names are ignored |
 | `ttl_s` | seconds | no | session forgotten after this silence (default 6h) |
 | `ended` | bool | no | `true` removes the session immediately |
 | `host` | string ≤64 | no | computer the session lives on (or header `X-Busybar-Host`) |
@@ -79,7 +79,7 @@ An adapter is just "run curl at the right moments":
   reads `~/.codex/config.toml` and the newest session rollout, deriving
   everything generically so model renames never break it: the label is
   prettified from the raw id (`gpt-5.6-sol` → `5.6 Sol` + effort),
-  `service_tier` ≠ default becomes a badge (`fast` → lightning),
+  `service_tier` ≠ default becomes a badge (`fast` → yellow working contour),
   context % comes from `last_token_usage / model_context_window`, and
   quotas from Codex's own `rate_limits` (names derived from
   `window_minutes`: 10080 → `7d`). Run it alongside the daemon:
@@ -240,8 +240,8 @@ The renderer's contract (do not grow provider knowledge into it):
 
 - state → ring animation + state word + colors
 - `label`/`label_color` → line 1
-- `context_pct` → the bar
-- `quotas` → line 2 text with worst-quota coloring
+- `context_pct` → normalized status data (not rendered in the compact front layout)
+- weekly `quotas` → remaining-capacity and reset-progress bars
 
 If a new provider needs something the schema can't express, extend the
 schema (v2) — don't special-case the renderer.

@@ -9,11 +9,11 @@ itself writes (config.toml defaults + the newest session rollout under
              ("gpt-5.6-sol" -> "5.6 Sol"; a future "gpt-7-luna" ->
              "7 Luna" with zero changes here), plus the reasoning effort
   - badges:  service_tier other than default becomes a badge
-             ("fast" renders as a lightning bolt on the display)
+             ("fast" selects the yellow high-speed working contour)
   - context: last_token_usage.total_tokens / model_context_window
   - quotas:  Codex's own rate_limits windows, named from window_minutes
              (600 -> "10h", 10080 -> "7d") - names survive plan changes
-  - state:   rollout file activity (recent writes = WORKING)
+  - state:   Codex task_started / task_complete lifecycle events
 
 Usage:
     python3 adapters/codex_status.py            # loop, report every 2s
@@ -36,12 +36,27 @@ DAEMON = report.BASE + "/v1/report"
 CODEX_HOME = pathlib.Path.home() / ".codex"
 SESSIONS = CODEX_HOME / "sessions"
 
-ACTIVE_S = 8        # rollout written this recently -> WORKING
-COMPLETE_S = 120    # ... this recently -> COMPLETE
+QUIET_RECHECK_S = 8  # one final read after the rollout stops changing
+COMPLETE_S = 120     # fallback for old rollouts without lifecycle events
 POLL_S = 2.0
-TAIL_BYTES = 128 * 1024
 
 VENDOR_PREFIXES = ("gpt-", "chatgpt-", "openai-")
+
+
+def _empty_snapshot() -> dict:
+    return {
+        "model": None, "effort": None, "tier": None,
+        "info": None, "limits": None, "state": None,
+    }
+
+
+# The long-running adapter reads only newly appended JSONL records. A --once
+# process starts with an empty cache and scans the current rollout once.
+_ROLLOUT_CACHE = {
+    "path": None,
+    "offset": 0,
+    "snapshot": _empty_snapshot(),
+}
 
 
 def prettify_model(model: str) -> str:
@@ -81,9 +96,64 @@ def newest_rollout() -> pathlib.Path | None:
     return max(files, key=lambda f: f.stat().st_mtime, default=None)
 
 
-def _last(pattern: str, text: str) -> str | None:
-    hits = re.findall(pattern, text)
-    return hits[-1] if hits else None
+def _apply_event(snapshot: dict, event: dict) -> None:
+    """Merge one structured rollout event into the latest known snapshot."""
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return
+
+    if event.get("type") == "turn_context":
+        for source_key, target_key in (("model", "model"), ("effort", "effort"),
+                                       ("service_tier", "tier")):
+            value = payload.get(source_key)
+            if isinstance(value, str) and value:
+                snapshot[target_key] = value
+        return
+
+    if event.get("type") != "event_msg":
+        return
+    event_type = payload.get("type")
+    if event_type == "task_started":
+        snapshot["state"] = "WORKING"
+    elif event_type in ("task_complete", "turn_aborted", "task_cancelled", "task_canceled"):
+        snapshot["state"] = "COMPLETE"
+    elif event_type == "token_count":
+        if isinstance(payload.get("info"), dict):
+            snapshot["info"] = payload["info"]
+        if isinstance(payload.get("rate_limits"), dict):
+            snapshot["limits"] = payload["rate_limits"]
+
+
+def _rollout_snapshot(path: pathlib.Path) -> dict:
+    """Incrementally parse JSONL and retain the latest structured fields."""
+    stat = path.stat()
+    if (_ROLLOUT_CACHE["path"] != path or stat.st_size < _ROLLOUT_CACHE["offset"]):
+        _ROLLOUT_CACHE.update({
+            "path": path,
+            "offset": 0,
+            "snapshot": _empty_snapshot(),
+        })
+
+    with path.open("rb") as stream:
+        stream.seek(_ROLLOUT_CACHE["offset"])
+        while True:
+            position = stream.tell()
+            raw = stream.readline()
+            if not raw:
+                break
+            try:
+                event = json.loads(raw)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                # Do not advance past a record while Codex is still appending it.
+                if not raw.endswith(b"\n"):
+                    stream.seek(position)
+                    break
+                _ROLLOUT_CACHE["offset"] = stream.tell()
+                continue
+            if isinstance(event, dict):
+                _apply_event(_ROLLOUT_CACHE["snapshot"], event)
+            _ROLLOUT_CACHE["offset"] = stream.tell()
+    return dict(_ROLLOUT_CACHE["snapshot"])
 
 
 def probe() -> dict | None:
@@ -103,43 +173,34 @@ def probe() -> dict | None:
     if rollout is not None:
         session_id = rollout.stem.split("rollout-")[-1][:64]
         age = time.time() - rollout.stat().st_mtime
-        state = "WORKING" if age < ACTIVE_S else ("COMPLETE" if age < COMPLETE_S else "IDLE")
+        snapshot = _rollout_snapshot(rollout)
+        state = snapshot["state"] or (
+            "WORKING" if age < QUIET_RECHECK_S else
+            ("COMPLETE" if age < COMPLETE_S else "IDLE")
+        )
+        model = snapshot["model"] or model
+        effort = snapshot["effort"] or effort
+        tier = snapshot["tier"] or tier
 
-        with rollout.open("rb") as f:
-            f.seek(max(0, rollout.stat().st_size - TAIL_BYTES))
-            tail = f.read().decode("utf-8", "replace")
+        info = snapshot["info"]
+        limits = snapshot["limits"]
+        if info:
+            window = info.get("model_context_window")
+            last = (info.get("last_token_usage") or {}).get("total_tokens")
+            if window and last:
+                context_pct = round(min(100, last * 100 / window), 1)
 
-        model = _last(r'"model"\s*:\s*"([^"]+)"', tail) or model
-        effort = _last(r'"reasoning_effort"\s*:\s*"([^"]+)"', tail) or effort
-        tier = _last(r'"service_tier"\s*:\s*"([^"]+)"', tail) or tier
-
-        tc = _last(r'"type":"token_count","info":(\{.*?"model_context_window":\d+\})', tail)
-        if tc:
-            try:
-                info = json.loads(tc)
-                window = info.get("model_context_window")
-                last = (info.get("last_token_usage") or {}).get("total_tokens")
-                if window and last:
-                    context_pct = round(min(100, last * 100 / window), 1)
-            except json.JSONDecodeError:
-                pass
-
-        rl = _last(r'"rate_limits":(\{.*?\}\})', tail)
-        if rl:
-            try:
-                limits = json.loads(rl)
-                quotas = []
-                for k in ("primary", "secondary"):
-                    w = limits.get(k) or {}
-                    if w.get("used_percent") is not None and w.get("window_minutes"):
-                        quotas.append({
-                            "name": window_name(w["window_minutes"]),
-                            "left_pct": max(0, round(100 - w["used_percent"])),
-                            "resets_at": w.get("resets_at"),
-                        })
-                quotas = quotas or None
-            except json.JSONDecodeError:
-                pass
+        if limits:
+            quotas = []
+            for k in ("primary", "secondary"):
+                w = limits.get(k) or {}
+                if w.get("used_percent") is not None and w.get("window_minutes"):
+                    quotas.append({
+                        "name": window_name(w["window_minutes"]),
+                        "left_pct": max(0, round(100 - w["used_percent"])),
+                        "resets_at": w.get("resets_at"),
+                    })
+            quotas = quotas or None
 
     if not model:
         return None
@@ -190,24 +251,23 @@ def main():
     if once:
         _emit(verbose)
         return
-    # Report only around real activity: every report bumps the session's
-    # last-active timestamp, and an idle Codex must not keep stealing the
-    # display from other agents. While the rollout advances we report
-    # (WORKING); once it stops we send ONE closing report (COMPLETE/IDLE
-    # per age) and then go silent - the daemon's own decay and ttl take
-    # it from there.
-    last_mtime = None
-    closed = False
+    # Report only while the rollout changes, plus one quiet recheck. State is
+    # taken from lifecycle events, so a long silent reasoning/tool interval
+    # remains WORKING until Codex actually writes task_complete.
+    last_stamp = None
+    quiet_rechecked = False
     while True:
         rollout = newest_rollout()
-        mtime = rollout.stat().st_mtime if rollout else None
-        if mtime != last_mtime:
-            last_mtime = mtime
-            closed = False
+        stat = rollout.stat() if rollout else None
+        stamp = (stat.st_mtime_ns, stat.st_size) if stat else None
+        if stamp != last_stamp:
+            last_stamp = stamp
+            quiet_rechecked = False
             _emit(verbose)
-        elif not closed and mtime is not None and time.time() - mtime > ACTIVE_S:
+        elif (not quiet_rechecked and stat is not None
+              and time.time() - stat.st_mtime > QUIET_RECHECK_S):
             _emit(verbose)
-            closed = True
+            quiet_rechecked = True
         time.sleep(POLL_S)
 
 

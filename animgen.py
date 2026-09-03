@@ -31,6 +31,7 @@ CLI_RAINBOW = [
 ]
 
 PURPLE = (175, 135, 255)   # CLI effortUltra
+FAST_YELLOW = (255, 210, 30)
 GREEN = (32, 192, 64)
 ORANGE = (255, 106, 0)
 RED = (255, 32, 32)
@@ -92,6 +93,17 @@ def anim_working(n=80):  # rainbow marquee, one full revolution per loop
         render_frame(lambda p, f=f: rainbow_at(p / PERIMETER + f / n))
         for f in range(n)
     ]
+
+
+def anim_fast_working(n=40):
+    """Fast tier: a yellow contour with a quick traveling highlight."""
+    def color(p, f):
+        wave = 0.5 + 0.5 * math.sin(
+            2 * math.pi * (p / PERIMETER - 2 * f / n)
+        )
+        return scale(FAST_YELLOW, 0.38 + 0.62 * wave)
+
+    return [render_frame(lambda p, f=f: color(p, f)) for f in range(n)]
 
 
 def anim_thinking(n=50):  # two purple crests traveling around
@@ -547,6 +559,7 @@ def anim_claude_theme(n=80):
 # filename -> (frame generator, width, height, fps)
 ANIMS = {
     "work.anim": (anim_working, W, H, FPS),
+    "work_fast.anim": (anim_fast_working, W, H, FPS),
     "think.anim": (anim_thinking, W, H, FPS),
     "done.anim": (anim_complete, W, H, FPS),
     "wait.anim": (anim_wait, W, H, FPS),
