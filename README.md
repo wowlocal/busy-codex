@@ -34,6 +34,49 @@ the 72×16 front LED matrix with buttery-smooth native animations.
 
 ![Ring only](docs/img/ring-only.png)
 
+### AI provider outage overlay
+
+An optional network-only monitor polls the open-source
+[AIWatch](https://github.com/bentleypark/aiwatch) public API. It groups related
+surfaces into seven providers: OpenAI (API, ChatGPT, Codex), Anthropic (API,
+claude.ai, Claude Code), Gemini, OpenRouter, DeepSeek, Mistral and Perplexity.
+
+X.com is monitored separately through the open-source
+[isUpMap](https://github.com/Jaironlanda/isupmap) API. It combines a direct
+availability check with a community-report surge signal, the closest open-source
+equivalent to Downdetector in this setup.
+
+Google.com is checked directly through Google's lightweight
+`/generate_204` connectivity endpoint. Two consecutive failures are required
+before a red `GOOGLE / DOWN / WEB` alert appears, avoiding one-off timeout
+flicker.
+
+While everything is operational the overlay owns no pixels, so the agent
+dashboard stays visible. A degraded or down provider takes over with a separate
+priority-80 canvas, an amber/red animated contour, provider name, affected
+surface and position in the rotation. Incidents appear first; Anthropic, X.com
+and Google.com are always appended to an active rotation and shown with a green
+`OK` state when healthy. xAI/Grok and GitHub Copilot are deliberately excluded.
+Items rotate every four seconds; stale or unavailable monitoring data is never
+presented as an outage. No Codex logs, browser automation, API key or persistent
+status file is used.
+
+The physical controls work while the overlay is visible: turn the encoder for
+the previous/next service, press `START` for next, or press `OK` to refresh all
+sources and return to the first item. Manual selection pauses auto-rotation for
+one four-second card interval. `BACK` remains the firmware's system-level exit
+key. Input comes directly from the device's local status WebSocket.
+
+Enable it in `env.sh`:
+
+```bash
+export BUSYBAR_AI_STATUS=1
+# Optional: BUSYBAR_AI_STATUS_POLL_S=60
+# Optional: BUSYBAR_AI_STATUS_URL=https://.../api/v1/status
+# Optional: BUSYBAR_X_STATUS_URL=https://.../api/status
+# Optional: BUSYBAR_GOOGLE_STATUS_URL=https://www.google.com/generate_204
+```
+
 ## How it works
 
 ```
@@ -83,12 +126,18 @@ cd busybar-claude-status
 python3 animgen.py anims/                 # generate ring animations
 python3 - <<'PY'                          # upload them to the device
 import animgen, urllib.request
-for f, gen in animgen.ANIMS.items():
-    blob = animgen.encode_anim(gen())
-    urllib.request.urlopen(urllib.request.Request(
-        f"http://10.0.4.20/api/assets/upload?application_name=claude_status&file={f}",
-        data=blob, method="POST"), timeout=15)
-    print("uploaded", f)
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+for app, animations in (
+    ("claude_status", animgen.ANIMS),
+    ("ai_provider_status", animgen.AI_STATUS_ANIMS),
+):
+    for f, (gen, w, h, fps) in animations.items():
+        frames = gen()
+        blob = animgen.encode_anim(frames, fps=fps, w=w, h=h)
+        opener.open(urllib.request.Request(
+            f"http://10.0.4.20/api/assets/upload?application_name={app}&file={f}",
+            data=blob, method="POST"), timeout=15)
+        print("uploaded", app, f)
 PY
 
 python3 setup_claude.py install           # wire into Claude Code (backs up first)
@@ -273,9 +322,10 @@ Things discovered the hard way, verified on-device:
 | File | Purpose |
 | --- | --- |
 | `daemon.py` | session store + `/status` + device renderer (stdlib only) |
+| `ai_status.py` | network-only AIWatch monitor + high-priority provider outage overlay |
 | `report.py` / `report.sh` | statusline/hook forwarder; auto-spawns the daemon, or forwards to a LAN hub when `BUSYBAR_HUB` is set (unless `BUSYBAR_STANDBY`) (`.py` = cross-platform, `.sh` = POSIX legacy) |
 | `setup_claude.py` | wire into / out of `~/.claude` (with backups); `--lan` / `--hub` / `--standby` / `--tag` / `--token` / `--style` for several computers |
-| `animgen.py` | `.anim` (bicycle0) encoder + the six ring animations |
+| `animgen.py` | `.anim` (bicycle0) encoder + agent-state and AI-alert contours |
 | `claude_card.py` | bind the CUSTOM key to the claude theme (and restore) |
 | `install_app.py`, `device_app/` | the future on-device JS app |
 | `screenshot.py` | grab the front display as an upscaled PNG |

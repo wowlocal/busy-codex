@@ -42,6 +42,8 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import ai_status
+
 # --------------------------------------------------------------------------
 # Config
 # --------------------------------------------------------------------------
@@ -86,6 +88,14 @@ RENDER_MODE = os.environ.get("BUSYBAR_RENDER_MODE", "auto")
 # Display style (env BUSYBAR_STYLE): "minimal" (text state word + quota
 # gauges) or "avatar" (a pixel companion acts out the state).
 STYLE = os.environ.get("BUSYBAR_STYLE", "minimal")
+AI_STATUS_ENABLED = os.environ.get("BUSYBAR_AI_STATUS", "").strip().lower() \
+    in ("1", "true", "yes", "on")
+AI_STATUS_URL = os.environ.get("BUSYBAR_AI_STATUS_URL", ai_status.API_URL).strip()
+X_STATUS_URL = os.environ.get("BUSYBAR_X_STATUS_URL", ai_status.X_STATUS_URL).strip()
+GOOGLE_STATUS_URL = os.environ.get(
+    "BUSYBAR_GOOGLE_STATUS_URL", ai_status.GOOGLE_STATUS_URL,
+).strip()
+AI_STATUS_POLL_S = float(os.environ.get("BUSYBAR_AI_STATUS_POLL_S", ai_status.POLL_S))
 APP_NAME = "claude_status"   # canvas app name; .anim assets live under it
 DRAW_PRIORITY = 50
 THEME_NAME = "claude"        # installed in /ext/apps_assets/busy/themes/
@@ -162,6 +172,7 @@ class HttpTransport:
         self.opener = opener or OPENER       # cloud: proxy-aware; usb/wifi: never
         self.device_ok: bool | None = None   # None until the first draw/clear
         self.last_error = ""
+        self.last_http_status: int | None = None
 
     def _note(self, ok: bool, err: str = ""):
         if ok:
@@ -180,16 +191,19 @@ class HttpTransport:
         req = urllib.request.Request(self.base + path, data=body, method=method,
                                      headers=headers)
         try:
-            with self.opener.open(req, timeout=self.TIMEOUT_S):
+            with self.opener.open(req, timeout=self.TIMEOUT_S) as response:
+                self.last_http_status = response.status
                 self._note(True)
                 return True
         except urllib.error.HTTPError as e:
+            self.last_http_status = e.code
             if e.code == 409:   # reachable; an active focus session owns the screen
                 self._note(True)
             else:
                 self._note(False, f"HTTP {e.code} on {method} {path}")
             return False
         except OSError as e:
+            self.last_http_status = None
             self._note(False, f"{type(e).__name__}: {e}"[:120])
             return False  # unplugged / offline; retried on the normal cadence
 
@@ -354,6 +368,7 @@ class Store:
 STORE = Store()
 STOP = threading.Event()   # set to make the daemon exit (signals, POST /shutdown)
 REDRAW = threading.Event() # POST /redraw: repaint (or clear) the whole canvas
+AI_MONITOR: ai_status.Monitor | None = None
 
 
 # --------------------------------------------------------------------------
@@ -923,6 +938,7 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
     last_anim = None
     last_anim_ts = 0.0
     last_tick = time.time()
+    ai_overlay_was_active = False
     while not stop.is_set():
         STORE.dirty.clear()
         now = time.time()
@@ -933,6 +949,19 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
             STORE.drop_mirrored()
             REDRAW.set()
         last_tick = now
+
+        # Do not queue lower-priority USB draw calls underneath the provider
+        # overlay. The firmware rejects or defers them, holding the shared
+        # render lock long enough to make a four-second carousel look stuck.
+        # Once the overlay clears, repaint the normal canvas from scratch.
+        ai_overlay_active = AI_MONITOR is not None and AI_MONITOR.drawn
+        if ai_overlay_active:
+            ai_overlay_was_active = True
+            STORE.dirty.wait(timeout=0.25)
+            continue
+        if ai_overlay_was_active:
+            last_anim, last_texts = None, None
+            ai_overlay_was_active = False
 
         with RENDER_LOCK:
             sess = STORE.active_session()
@@ -1025,7 +1054,10 @@ class Handler(BaseHTTPRequestHandler):
                 "render_mode": RENDER_MODE,
                 "device_ok": TRANSPORT.device_ok if TRANSPORT else None,
                 "device_error": TRANSPORT.last_error if TRANSPORT else "",
-                "rendering": DRAWN.is_set()}).encode())
+                "rendering": DRAWN.is_set(),
+                "ai_status": (AI_MONITOR.status() if AI_MONITOR else
+                              {"enabled": False}),
+            }).encode())
         elif self.path == "/standby":
             if HUBLINK is None:
                 self._reply(404, b'{"error":"not a standby daemon"}')
@@ -1210,7 +1242,7 @@ def bind_loop(addr: str, stop: threading.Event, servers: list):
 
 
 def main():
-    global HUBLINK, TRANSPORT
+    global HUBLINK, TRANSPORT, AI_MONITOR
     stop = STOP
     servers = []
     TRANSPORT = transport = make_transport()
@@ -1237,17 +1269,42 @@ def main():
 
     if RENDER_MODE != "off":
         threading.Thread(target=render_loop, args=(transport, stop), daemon=True).start()
+        if AI_STATUS_ENABLED:
+            AI_MONITOR = ai_status.Monitor(
+                transport,
+                RENDER_LOCK,
+                url=AI_STATUS_URL,
+                x_url=X_STATUS_URL,
+                google_url=GOOGLE_STATUS_URL,
+                input_url=(ai_status.input_stream_url(
+                               transport.base,
+                               transport.headers.get("x-api-token", ""),
+                           )
+                           if os.environ.get("BUSYBAR_TRANSPORT", "usb") != "cloud"
+                           else ""),
+                poll_s=AI_STATUS_POLL_S,
+                should_render=lambda: HUBLINK is None or HUBLINK.takeover,
+                logger=log,
+            )
+            threading.Thread(target=AI_MONITOR.run, args=(stop,), daemon=True).start()
     if RENDER_MODE == "theme":
         threading.Thread(target=snapshot_watch_loop, args=(transport, stop), daemon=True).start()
     log(f"listening on {LISTEN_ADDRS[0]}:{LISTEN_PORT}, render_mode={RENDER_MODE}, "
         f"style={STYLE}, transport={os.environ.get('BUSYBAR_TRANSPORT', 'usb')}, "
+        f"ai_status={'on' if AI_STATUS_ENABLED else 'off'}, "
         f"hub_token={'on' if HUB_TOKEN else 'off'}, "
         f"role={ROLE}{' for ' + HUB_URL if STANDBY else ''}")
 
     while not stop.is_set():
         stop.wait(timeout=3600)
-    if RENDER_MODE != "off" and DRAWN.is_set():
-        transport.clear(APP_NAME)   # only ever what we painted ourselves
+    if RENDER_MODE != "off":
+        # Wait for any final monitor draw, then remove only our two canvases.
+        with RENDER_LOCK:
+            if AI_MONITOR is not None:
+                transport.clear(ai_status.APP_NAME)
+                AI_MONITOR.drawn = False
+            if DRAWN.is_set():
+                transport.clear(APP_NAME)
     return 0
 
 if __name__ == "__main__":

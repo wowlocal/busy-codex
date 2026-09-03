@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Generate Busy Bar `.anim` files ("bicycle0" format) for the Claude
-status ring — one seamless-looping animation per session state.
+"""Generate Busy Bar `.anim` files ("bicycle0" format) for the agent
+status ring and the independent AI-provider outage overlay.
 
 The ring is drawn PER-PIXEL along the 172px perimeter path at 25 fps and
 played natively by the device's anim decoder, which is exactly how the
@@ -11,7 +11,7 @@ the public struct layouts in lib/anim_file/anim_file_format.h. The RLE
 codec here is an independent implementation of that documented format.
 
 Usage:
-    python3 animgen.py out_dir/     # writes work.anim, think.anim, ...
+    python3 animgen.py out_dir/     # writes work.anim, degraded.anim, ...
 """
 
 from __future__ import annotations
@@ -139,6 +139,46 @@ def anim_error(n=12):  # 2 Hz hard blink, dim in the off phase
 
 def anim_idle():
     return [render_frame(lambda p: scale(GRAY, 0.5))]
+
+
+def anim_ai_degraded(n=60):
+    """Warm amber warning contour with two soft counter-moving highlights."""
+    def color(p, f):
+        u = p / PERIMETER
+        a = 0.5 + 0.5 * math.sin(2 * math.pi * (u - f / n))
+        b = 0.5 + 0.5 * math.sin(2 * math.pi * (u + f / n + 0.5))
+        glow = max(a ** 5, b ** 5)
+        pulse = 0.82 + 0.18 * math.sin(2 * math.pi * f / n)
+        return lerp(scale(ORANGE, 0.34 * pulse), FAST_YELLOW, glow)
+
+    return [render_frame(lambda p, f=f: color(p, f)) for f in range(n)]
+
+
+def anim_ai_healthy(n=70):
+    """Calm green contour for pinned services that are currently healthy."""
+    def color(p, f):
+        u = p / PERIMETER
+        wave = 0.5 + 0.5 * math.sin(2 * math.pi * (u - f / n))
+        breath = 0.88 + 0.12 * math.sin(2 * math.pi * f / n)
+        return scale(GREEN, (0.28 + 0.52 * wave ** 5) * breath)
+
+    return [render_frame(lambda p, f=f: color(p, f)) for f in range(n)]
+
+
+def anim_ai_down(n=30):
+    """Urgent red contour: a heartbeat with a fast white-hot leading edge."""
+    def color(p, f):
+        phase = f / n
+        heartbeat = max(
+            math.exp(-((phase - 0.10) / 0.07) ** 2),
+            0.72 * math.exp(-((phase - 0.28) / 0.08) ** 2),
+        )
+        distance = abs(((p / PERIMETER - 2 * phase + 0.5) % 1.0) - 0.5)
+        spark = max(0.0, 1.0 - distance / 0.055) ** 2
+        base = scale(RED, 0.25 + 0.75 * heartbeat)
+        return lerp(base, (255, 170, 110), spark)
+
+    return [render_frame(lambda p, f=f: color(p, f)) for f in range(n)]
 
 
 # --------------------------------------------------------------------------
@@ -573,12 +613,19 @@ ANIMS = {
     "claw_idle.anim": (lambda: _avatar(_AV_IDLE_A, _AV_IDLE_B), AVATAR_W, AVATAR_H, 2),
 }
 
+# These live under the independent high-priority `ai_provider_status` canvas.
+AI_STATUS_ANIMS = {
+    "healthy.anim": (anim_ai_healthy, W, H, FPS),
+    "degraded.anim": (anim_ai_degraded, W, H, FPS),
+    "outage.anim": (anim_ai_down, W, H, FPS),
+}
+
 
 def main():
     import pathlib
     out = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     out.mkdir(parents=True, exist_ok=True)
-    for fname, (gen, w, h, fps) in ANIMS.items():
+    for fname, (gen, w, h, fps) in {**ANIMS, **AI_STATUS_ANIMS}.items():
         frames = gen()
         blob = encode_anim(frames, fps=fps, w=w, h=h)
         decode_check(blob, frames, w=w, h=h)

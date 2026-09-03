@@ -10,7 +10,8 @@ import base64, struct, sys, urllib.request, zlib
 
 W, H, SCALE = 72, 16, 6
 url = "http://10.0.4.20/api/screen?display=0"
-raw = base64.b64decode(urllib.request.urlopen(url, timeout=5).read())
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+raw = base64.b64decode(opener.open(url, timeout=5).read())
 assert len(raw) == W * H * 3, len(raw)
 
 out = sys.argv[1] if len(sys.argv) > 1 else "front.png"

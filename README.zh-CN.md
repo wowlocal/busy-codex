@@ -48,6 +48,32 @@ max 紫 `effortUltra`(175,135,255)。
 **周重置进度条**：右上 20×4px，越接近重置越满（<50 绿 / ≥50 黄 / ≥80 橙 / ≥90 红）。
 **plan 剩余**：下方 `W` 进度条显示周配额余量，≤50% 黄、≤25% 橙、≤10% 红。
 
+## AI 服务故障提醒
+
+可选的纯网络监控从开源 [AIWatch](https://github.com/bentleypark/aiwatch)
+公共 JSON API 读取状态，不读取 Codex 本地日志，也不需要浏览器、API key 或
+持久化状态文件。默认覆盖 OpenAI（API / ChatGPT / Codex）、Anthropic
+（API / claude.ai / Claude Code）、Gemini、OpenRouter、DeepSeek、Mistral
+和 Perplexity；xAI/Grok 与 GitHub Copilot 被排除。
+
+X.com 单独通过开源 [isUpMap](https://github.com/Jaironlanda/isupmap) API
+监控，同时使用直接可用性检测和类似 Downdetector 的社区报告突增信号。
+Google.com 通过 Google 的 `/generate_204` 端点直接检测；连续两次失败才会显示
+红色 `GOOGLE / DOWN / WEB`，避免单次超时造成闪烁。
+
+全部正常时它不占任何像素；出现 `degraded/down` 时，独立的高优先级画布会以
+黄/红动态边框显示故障厂商和受影响界面。故障项优先显示，Anthropic、X.com 和
+Google.com 会固定追加到活动轮播中，正常时以绿色 `OK` 显示。各项每四秒轮播；
+监控源不可达或数据过期时显示为未知，不会误报成厂商故障。
+
+故障画面显示时可使用实体控制：旋转编码器切换上一个/下一个服务，按 `START`
+切换下一项；按 `OK` 会立即刷新所有来源并回到第一项。手动选择后自动轮播暂停
+一个四秒卡片周期；`BACK` 保留为固件的系统退出键。输入直接来自设备的本地状态 WebSocket。
+
+```bash
+export BUSYBAR_AI_STATUS=1
+```
+
 ## 架构
 
 ```

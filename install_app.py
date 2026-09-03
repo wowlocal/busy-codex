@@ -23,7 +23,9 @@ BASE = "http://10.0.4.20/api"
 APP_ID = "org.anthropic.claude_status"
 APP_ROOT = f"/ext/user_assets/{APP_ID}"
 CANVAS_APP = "claude_status"  # where the .anim assets live
+AI_CANVAS_APP = "ai_provider_status"
 HERE = pathlib.Path(__file__).parent
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def api(method: str, path: str, body: bytes | None = None, retry: bool = True) -> bytes:
@@ -36,7 +38,7 @@ def api(method: str, path: str, body: bytes | None = None, retry: bool = True) -
             headers={"Content-Type": "application/octet-stream"} if body else {},
         )
         try:
-            with urllib.request.urlopen(req, timeout=20) as r:
+            with OPENER.open(req, timeout=20) as r:
                 data = r.read()
             time.sleep(0.3)
             return data
@@ -148,6 +150,12 @@ def main():
         animgen.decode_check(blob, frames, w=w, h=h)
         api("POST", f"/assets/upload?application_name={CANVAS_APP}&file={fname}", blob)
         print(f"upload asset {fname} ({len(blob)} bytes)")
+    for fname, (gen, w, h, fps) in animgen.AI_STATUS_ANIMS.items():
+        frames = gen()
+        blob = animgen.encode_anim(frames, fps=fps, w=w, h=h)
+        animgen.decode_check(blob, frames, w=w, h=h)
+        api("POST", f"/assets/upload?application_name={AI_CANVAS_APP}&file={fname}", blob)
+        print(f"upload AI status asset {fname} ({len(blob)} bytes)")
 
     # 4. manifest LAST: the firmware's JS-app scanner reacts to it, and a
     #    manifest pointing at an incomplete app tree crashes (and reboots)
