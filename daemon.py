@@ -22,18 +22,20 @@ Layout (72x16 front display):
 
     ############################    1px per-pixel animated ring (.anim)
     #  Fable 5 max      [##----] #  label            | time-to-reset progress
-    #  W [quota bar]       WORK   #  quota remaining | state word
+    #  W [quota bar] A     WORK   #  quota remaining | Astra | state word
     ############################
 """
 
 from __future__ import annotations
 
 import hmac
+import http.client
 import json
 import os
 import re
 import secrets
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -43,6 +45,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import ai_status
+import x_pulse
 
 # --------------------------------------------------------------------------
 # Config
@@ -78,6 +81,7 @@ INSTANCE = secrets.token_hex(8)   # this process; GET /hub reports it
 # system proxy): a proxy is never the route to 127.0.0.1, the USB link, the
 # Bar's LAN address or the hub's .local name.
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+USB_SOURCE_IP = os.environ.get("BUSYBAR_USB_SOURCE_IP", "10.0.4.21").strip()
 
 # How the daemon renders to the device (env BUSYBAR_RENDER_MODE overrides):
 #   "auto"  - whenever any reporting agent is active (the always-on behavior)
@@ -96,6 +100,60 @@ GOOGLE_STATUS_URL = os.environ.get(
     "BUSYBAR_GOOGLE_STATUS_URL", ai_status.GOOGLE_STATUS_URL,
 ).strip()
 AI_STATUS_POLL_S = float(os.environ.get("BUSYBAR_AI_STATUS_POLL_S", ai_status.POLL_S))
+ASTRA_STATE_PATH = os.path.expanduser(os.environ.get(
+    "BUSYBAR_ASTRA_STATE",
+    "~/.local/state/astra-watch/state.json",
+))
+ASTRA_STALE_S = float(os.environ.get("BUSYBAR_ASTRA_STALE_S", "1800"))
+ASTRA_CHECK_INTERVAL_S = max(60.0, float(os.environ.get(
+    "BUSYBAR_ASTRA_CHECK_INTERVAL_S", "600",
+)))
+ASTRA_WATCH_SCRIPT = os.path.expanduser(os.environ.get(
+    "BUSYBAR_ASTRA_WATCH_SCRIPT",
+    "~/plugins/astra-watch/scripts/astra_watch.py",
+))
+X_PULSE_ENABLED = os.environ.get("BUSYBAR_X_PULSE", "").strip().lower() \
+    in ("1", "true", "yes", "on")
+X_PULSE_BACKEND = os.environ.get("BUSYBAR_X_PULSE_BACKEND", "bird").strip().lower()
+X_PULSE_SSH_HOST = os.environ.get("BUSYBAR_X_PULSE_SSH_HOST", "mija").strip()
+X_PULSE_APP = os.environ.get("BUSYBAR_X_PULSE_APP", "mija-x").strip()
+X_PULSE_USERNAME = os.environ.get(
+    "BUSYBAR_X_PULSE_USERNAME", "MishaNevazhno",
+).strip()
+X_PULSE_POLL_S = max(300.0, float(os.environ.get(
+    "BUSYBAR_X_PULSE_POLL_S", "21600",
+)))
+X_PULSE_MAX_RESULTS = max(10, min(100, int(os.environ.get(
+    "BUSYBAR_X_PULSE_MAX_RESULTS", "25",
+))))
+X_PULSE_MAX_PAGES = max(1, min(5, int(os.environ.get(
+    "BUSYBAR_X_PULSE_MAX_PAGES", "1",
+))))
+X_PULSE_BIRD_PATH = os.environ.get(
+    "BUSYBAR_X_PULSE_BIRD_PATH", "/usr/local/bin/bird",
+).strip()
+X_PULSE_STATE_PATH = os.path.expanduser(os.environ.get(
+    "BUSYBAR_X_PULSE_STATE",
+    "~/.local/state/astra-watch/x-pulse.json",
+))
+X_PULSE_CLASSIFIER_VALIDATED = os.environ.get(
+    "BUSYBAR_X_PULSE_CLASSIFIER_VALIDATED", "",
+).strip().lower() in ("1", "true", "yes", "on")
+X_PULSE_LLM_ENABLED = os.environ.get(
+    "BUSYBAR_X_PULSE_LLM", "",
+).strip().lower() in ("1", "true", "yes", "on")
+X_PULSE_LLM_MODEL = os.environ.get(
+    "BUSYBAR_X_PULSE_LLM_MODEL", "gpt-5.6-luna",
+).strip()
+X_PULSE_LLM_MAX_ITEMS = max(1, min(16, int(os.environ.get(
+    "BUSYBAR_X_PULSE_LLM_MAX_ITEMS", "12",
+))))
+X_PULSE_LLM_TIMEOUT_S = max(20.0, float(os.environ.get(
+    "BUSYBAR_X_PULSE_LLM_TIMEOUT_S", "90",
+)))
+X_PULSE_CODEX_PATH = os.path.expanduser(os.environ.get(
+    "BUSYBAR_X_PULSE_CODEX_PATH", "codex",
+)).strip()
 APP_NAME = "claude_status"   # canvas app name; .anim assets live under it
 DRAW_PRIORITY = 50
 THEME_NAME = "claude"        # installed in /ext/apps_assets/busy/themes/
@@ -153,6 +211,57 @@ BAR_TRACK_COLOR = "#262626FF"
 LABEL_MAX_PX = BAR_X - 2 - 3
 QUOTA_BAR_X, QUOTA_BAR_Y, QUOTA_BAR_W, QUOTA_BAR_H = 10, 10, 35, 4
 WEEK_SECONDS = 7 * 24 * 60 * 60
+ASTRA_COLORS = {
+    "waiting": "#606060FF", "hidden": "#FFB000FF",
+    "available": "#20C040FF", "error": "#FF2020FF",
+    "stale": "#FF2020FF", "unknown": "#00000000",
+}
+ASTRA_REFRESH_LOCK = threading.Lock()
+ASTRA_REFRESHED_AT = 0.0
+ASTRA_APP_LOCK = threading.Lock()
+ASTRA_APP_LAST_SEEN = 0.0
+ASTRA_APP_REQUESTS = 0
+ASTRA_APP_ACTIVE_S = 5.0
+
+
+def _fetch_x_pulse() -> dict:
+    return x_pulse.fetch(
+        X_PULSE_SSH_HOST,
+        backend=X_PULSE_BACKEND,
+        app=X_PULSE_APP,
+        username=X_PULSE_USERNAME,
+        max_results=X_PULSE_MAX_RESULTS,
+        state_path=X_PULSE_STATE_PATH,
+        classifier_validated=X_PULSE_CLASSIFIER_VALIDATED,
+        max_pages=X_PULSE_MAX_PAGES,
+        bird_path=X_PULSE_BIRD_PATH,
+        llm_enabled=X_PULSE_LLM_ENABLED,
+        llm_model=X_PULSE_LLM_MODEL,
+        llm_max_items=X_PULSE_LLM_MAX_ITEMS,
+        llm_timeout_s=X_PULSE_LLM_TIMEOUT_S,
+        codex_path=X_PULSE_CODEX_PATH,
+    )
+
+
+X_PULSE_MONITOR = x_pulse.Monitor(
+    _fetch_x_pulse,
+    interval_s=X_PULSE_POLL_S,
+    stale_s=max(3 * X_PULSE_POLL_S, 6 * 3600),
+) if X_PULSE_ENABLED else None
+if X_PULSE_MONITOR is not None:
+    try:
+        cached = x_pulse.cached_summary(
+            X_PULSE_STATE_PATH,
+            backend=X_PULSE_BACKEND,
+            classifier_validated=X_PULSE_CLASSIFIER_VALIDATED,
+            llm_enabled=X_PULSE_LLM_ENABLED,
+            llm_model=X_PULSE_LLM_MODEL,
+        )
+        if cached is not None:
+            X_PULSE_MONITOR.seed(cached[0], checked_at=cached[1])
+    except Exception:
+        # A damaged cache must never prevent the local status daemon starting.
+        pass
 
 
 # --------------------------------------------------------------------------
@@ -227,13 +336,35 @@ class HttpTransport:
         """Cheap liveness check that never touches the canvas."""
         return self.get_json("/version") is not None
 
+
+class SourceAddressHTTPHandler(urllib.request.HTTPHandler):
+    """Keep USB device traffic off VPNs that also advertise 10.0.4.0/24."""
+
+    def __init__(self, source_address: str):
+        super().__init__()
+        self.source_address = source_address
+
+    def http_open(self, request):
+        def connection(host, **kwargs):
+            return http.client.HTTPConnection(
+                host, source_address=(self.source_address, 0), **kwargs,
+            )
+        return self.do_open(connection, request)
+
+
+def usb_opener():
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        SourceAddressHTTPHandler(USB_SOURCE_IP),
+    )
+
 def make_transport() -> HttpTransport:
     kind = os.environ.get("BUSYBAR_TRANSPORT", "usb")
     if kind == "usb":
         if STANDBY:
             sys.exit("a standby cannot use the hub's USB link: set BUSYBAR_TRANSPORT=wifi "
                      "(BUSYBAR_DEVICE, BUSYBAR_TOKEN) - setup_claude.py install --standby ...")
-        return HttpTransport("http://10.0.4.20/api")
+        return HttpTransport("http://10.0.4.20/api", opener=usb_opener())
     if kind == "wifi":
         host = os.environ.get("BUSYBAR_DEVICE", "")
         legacy = os.environ.get("BUSYBAR_HOST", "")
@@ -369,6 +500,10 @@ STORE = Store()
 STOP = threading.Event()   # set to make the daemon exit (signals, POST /shutdown)
 REDRAW = threading.Event() # POST /redraw: repaint (or clear) the whole canvas
 AI_MONITOR: ai_status.Monitor | None = None
+DEVICE_INPUT_LOCK = threading.Lock()
+DEVICE_MODE: str | None = None
+DEVICE_INPUT_CONNECTED = False
+DEVICE_INPUT_ERROR = ""
 
 
 # --------------------------------------------------------------------------
@@ -809,6 +944,116 @@ def week_progress_pct(quota: dict | None, now: float | None = None) -> float | N
     return 100.0 * (1.0 - seconds_left / WEEK_SECONDS)
 
 
+def astra_availability(path: str | None = None, now: float | None = None) -> dict:
+    """Read the small, non-secret state written by the Astra Watch plugin."""
+    path = path or ASTRA_STATE_PATH
+    now = time.time() if now is None else now
+    try:
+        with open(path, encoding="utf-8") as stream:
+            payload = json.load(stream)
+        modified_at = os.path.getmtime(path)
+    except (OSError, json.JSONDecodeError):
+        state = "unknown"
+        payload = {}
+        modified_at = None
+    else:
+        state = payload.get("last_state")
+        if state not in ("waiting", "hidden", "available", "error"):
+            state = "unknown"
+        elif ASTRA_STALE_S > 0 and now - modified_at > ASTRA_STALE_S:
+            state = "stale"
+    age_s = max(0.0, now - modified_at) if modified_at is not None else None
+    return {
+        "target": payload.get("target", "gpt-6-astra"),
+        "state": state,
+        "color": ASTRA_COLORS[state],
+        "last_checked_at": payload.get("last_checked_at"),
+        "catalog_fetched_at": payload.get("catalog_fetched_at"),
+        "client_version": payload.get("client_version"),
+        "model_count": payload.get("model_count"),
+        "visibility": payload.get("visibility"),
+        "age_s": round(age_s, 1) if age_s is not None else None,
+        "next_check_s": (max(0, round(ASTRA_CHECK_INTERVAL_S - age_s))
+                         if age_s is not None else None),
+        "check_interval_s": round(ASTRA_CHECK_INTERVAL_S),
+        "stale": state == "stale",
+    }
+
+
+def request_astra_refresh(now: float | None = None) -> tuple[bool, str]:
+    """Start a non-inference catalog refresh, with a short debounce."""
+    global ASTRA_REFRESHED_AT
+    now = time.time() if now is None else now
+    with ASTRA_REFRESH_LOCK:
+        if now - ASTRA_REFRESHED_AT < 15:
+            return True, "already refreshing"
+        if not os.path.isfile(ASTRA_WATCH_SCRIPT):
+            return False, "Astra Watch script is not installed"
+        try:
+            subprocess.Popen(
+                [sys.executable, ASTRA_WATCH_SCRIPT, "check", "--json"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+            )
+        except OSError as exc:
+            return False, f"could not start Astra Watch: {exc}"
+        ASTRA_REFRESHED_AT = now
+    return True, "refresh started"
+
+
+def x_pulse_status(now: float | None = None) -> dict:
+    if X_PULSE_MONITOR is None:
+        return {
+            "enabled": False, "state": "disabled", "official": False,
+            "label": "X community pulse",
+        }
+    return X_PULSE_MONITOR.status(now)
+
+
+def request_x_pulse_refresh(*, force: bool = False, now: float | None = None) -> bool:
+    if X_PULSE_MONITOR is None:
+        return False
+    return X_PULSE_MONITOR.request_refresh(force=force, now=now)
+
+
+def astra_watch_status() -> dict:
+    status = astra_availability()
+    status["x_pulse"] = x_pulse_status()
+    return status
+
+
+def mark_astra_app_seen(now: float | None = None):
+    """Record a status poll from the on-device app for button routing/debug."""
+    global ASTRA_APP_LAST_SEEN, ASTRA_APP_REQUESTS
+    with ASTRA_APP_LOCK:
+        ASTRA_APP_LAST_SEEN = time.monotonic() if now is None else now
+        ASTRA_APP_REQUESTS += 1
+    STORE.dirty.set()
+
+
+def astra_app_status(now: float | None = None) -> dict:
+    now = time.monotonic() if now is None else now
+    with ASTRA_APP_LOCK:
+        age = now - ASTRA_APP_LAST_SEEN if ASTRA_APP_LAST_SEEN else None
+        requests = ASTRA_APP_REQUESTS
+    return {
+        "active": age is not None and age <= ASTRA_APP_ACTIVE_S,
+        "last_seen_age_s": round(max(0.0, age), 1) if age is not None else None,
+        "requests": requests,
+    }
+
+
+def handle_astra_app_poll(now: float | None = None):
+    """Refresh once when the on-device app opens, then serve cheap polls."""
+    was_active = astra_app_status(now)["active"]
+    mark_astra_app_seen(now)
+    if not was_active:
+        request_astra_refresh()
+    request_x_pulse_refresh()
+
+
 def _norm_color(c, fallback: str) -> str:
     if not isinstance(c, str) or not c.startswith("#") or len(c) not in (7, 9):
         return fallback
@@ -828,9 +1073,11 @@ def _text(eid, x, y, align, text, color):
             "text": text, "font": FONT, "color": color, "timeout": TEXT_TIMEOUT_S}
 
 
-def anim_element(state: str, badges=None) -> dict:
+def anim_element(state: str, badges=None, astra_state: str | None = None) -> dict:
     path = STATE_ANIMS.get(state, "idle.anim")
-    if state == "WORKING" and "fast" in (badges or []):
+    if astra_state == "available":
+        path = "astra.anim"
+    elif state == "WORKING" and "fast" in (badges or []):
         path = "work_fast.anim"
     return {"id": "ring", "type": "animation", "display": "front",
             "x": 0, "y": 0, "path": path,
@@ -844,7 +1091,102 @@ def avatar_element(state: str) -> dict:
             "loop": True, "timeout": ANIM_TIMEOUT_S}
 
 
-def info_elements(status: dict) -> list[dict]:
+def device_canvas_allowed() -> bool:
+    with DEVICE_INPUT_LOCK:
+        mode_allowed = DEVICE_MODE not in ("APPS", "SETTINGS")
+    return mode_allowed and not astra_app_status()["active"]
+
+
+def handle_device_input_event(event: tuple) -> bool:
+    """Track the mode selector and route OK to an active Astra Watch app."""
+    global DEVICE_MODE
+    if not event:
+        return False
+    if event[0] == "button":
+        if event[1:3] == (0, 0) and astra_app_status()["active"]:
+            request_astra_refresh()
+            request_x_pulse_refresh(force=True)
+            return True
+        return False
+    if event[0] != "switch":
+        return False
+    mode = {0: "BUSY", 1: "CUSTOM", 2: "OFF", 3: "APPS", 4: "SETTINGS"}.get(
+        event[1], "UNKNOWN",
+    )
+    with DEVICE_INPUT_LOCK:
+        changed = mode != DEVICE_MODE
+        DEVICE_MODE = mode
+    if changed:
+        STORE.dirty.set()
+    return changed
+
+
+def device_input_loop(input_url: str, stop: threading.Event,
+                      source_address: str | None = None):
+    """Observe switch events using the same local WebSocket as the SDK."""
+    global DEVICE_INPUT_CONNECTED, DEVICE_INPUT_ERROR
+    logged_error = ""
+    while not stop.is_set():
+        sock = None
+        try:
+            sock = ai_status._ws_connect(input_url, source_address=source_address)
+            ai_status._ws_send(sock, 1, b'{"enable":true}')
+            with DEVICE_INPUT_LOCK:
+                DEVICE_INPUT_CONNECTED = True
+                DEVICE_INPUT_ERROR = ""
+            if logged_error:
+                log("BUSY mode observer connected again")
+                logged_error = ""
+            fragments = bytearray()
+            fragment_opcode = None
+            next_ping = time.monotonic() + ai_status.WS_PING_INTERVAL_S
+            while not stop.is_set():
+                if time.monotonic() >= next_ping:
+                    ai_status._ws_send(sock, 9, os.urandom(4))
+                    next_ping = time.monotonic() + ai_status.WS_PING_INTERVAL_S
+                try:
+                    opcode, final, payload = ai_status._ws_recv(sock)
+                except TimeoutError:
+                    continue
+                if opcode == 8:
+                    raise ConnectionError("WebSocket closed")
+                if opcode == 9:
+                    ai_status._ws_send(sock, 10, payload)
+                    continue
+                if opcode == 10:
+                    continue
+                if opcode in (1, 2):
+                    fragments = bytearray(payload)
+                    fragment_opcode = opcode
+                elif opcode == 0 and fragment_opcode is not None:
+                    fragments.extend(payload)
+                else:
+                    continue
+                if not final:
+                    continue
+                if fragment_opcode == 2:
+                    for event in ai_status.parse_input_events(bytes(fragments)):
+                        handle_device_input_event(event)
+                fragments.clear()
+                fragment_opcode = None
+        except (OSError, ValueError, ConnectionError) as exc:
+            error = f"{type(exc).__name__}: {exc}"[:160]
+            with DEVICE_INPUT_LOCK:
+                DEVICE_INPUT_CONNECTED = False
+                DEVICE_INPUT_ERROR = error
+            if error != logged_error and not stop.is_set():
+                log(f"BUSY mode observer unavailable: {error}")
+                logged_error = error
+            stop.wait(timeout=3)
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+
+
+def info_elements(status: dict, astra: dict | None = None) -> list[dict]:
     """Text rows + weekly gauges for a normalized snapshot (ring/avatar are
     separate animation elements)."""
     avatar = STYLE == "avatar"
@@ -906,6 +1248,17 @@ def info_elements(status: dict) -> list[dict]:
                               QUOTA_BAR_W, QUOTA_BAR_H, "#00000000"))
         elements.append(_rect("qfill", QUOTA_BAR_X, QUOTA_BAR_Y,
                               1, QUOTA_BAR_H, "#00000000"))
+
+    # Tiny 3x5 pixel "A" between the quota gauge and state word. The plugin
+    # state maps to: waiting gray, server-visible-but-hidden amber, available
+    # green, and stale/error red. It is transparent when Astra Watch is absent.
+    astra_color = (astra or astra_availability())["color"]
+    elements.extend((
+        _rect("astra_top", 47, 10, 1, 1, astra_color),
+        _rect("astra_left", 46, 11, 1, 4, astra_color),
+        _rect("astra_right", 48, 11, 1, 4, astra_color),
+        _rect("astra_cross", 46, 12, 3, 1, astra_color),
+    ))
     if not avatar:
         elements.append(_text("state", 69, 15, "bottom_right",
                               STATE_WORDS.get(state, state[:5]),
@@ -973,6 +1326,7 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                     and now - max(sess["state_ts"], sess["last_active"]) > IDLE_CLEAR_AFTER_S
                 )
                 gate_ok = THEME_ACTIVE.is_set() if RENDER_MODE == "theme" else True
+                gate_ok = gate_ok and device_canvas_allowed()
                 if HUBLINK is not None:
                     gate_ok = gate_ok and HUBLINK.takeover   # standby: only while the hub is out
                 want = gate_ok and not idle_expired
@@ -996,7 +1350,10 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                     # Leftovers first: a sleeping hub's frame, another style's ids.
                     transport.clear(APP_NAME)
                 status = status_snapshot()
-                anim = anim_element(status["state"], status.get("badges"))
+                astra = astra_availability()
+                anim = anim_element(
+                    status["state"], status.get("badges"), astra["state"],
+                )
                 if anim["path"] != last_anim or now - last_anim_ts > ANIM_REFRESH_S:
                     anims = [anim]
                     if STYLE == "avatar":
@@ -1005,7 +1362,7 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                                        "priority": DRAW_PRIORITY, "elements": anims}):
                         last_anim, last_anim_ts = anim["path"], now
                         DRAWN.set()
-                texts = info_elements(status)
+                texts = info_elements(status, astra)
                 encoded = json.dumps(texts, sort_keys=True)
                 if encoded != last_texts or now - last_texts_ts > KEEPALIVE_S:
                     if transport.draw({"application_name": APP_NAME,
@@ -1048,13 +1405,25 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/status", "/v1/status"):
             self._reply(200, json.dumps(status_snapshot()).encode())
+        elif self.path == "/astra":
+            if self.client_address[0] == "10.0.4.20":
+                handle_astra_app_poll()
+            self._reply(200, json.dumps(astra_watch_status()).encode())
         elif self.path == "/hub":
             self._reply(200, json.dumps({
                 "ok": True, "instance": INSTANCE, "role": ROLE, "style": STYLE,
                 "render_mode": RENDER_MODE,
+                "device_mode": DEVICE_MODE,
+                "device_input": {
+                    "connected": DEVICE_INPUT_CONNECTED,
+                    "error": DEVICE_INPUT_ERROR,
+                },
                 "device_ok": TRANSPORT.device_ok if TRANSPORT else None,
                 "device_error": TRANSPORT.last_error if TRANSPORT else "",
                 "rendering": DRAWN.is_set(),
+                "astra": astra_availability(),
+                "x_pulse": x_pulse_status(),
+                "astra_app": astra_app_status(),
                 "ai_status": (AI_MONITOR.status() if AI_MONITOR else
                               {"enabled": False}),
             }).encode())
@@ -1087,7 +1456,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         host_fields = self._host_fields()
 
-        if parsed.path == "/v1/report":
+        if parsed.path == "/astra/refresh":
+            # The on-device Astra app lives at 10.0.4.20. This action only
+            # refreshes the personalized model catalog; it never runs a model.
+            if self.client_address[0] not in ("127.0.0.1", "::1", "10.0.4.20"):
+                self._reply(403, b'{"error":"local device only"}')
+                return
+            started, message = request_astra_refresh()
+            self._reply(202 if started else 503, json.dumps({
+                "ok": started, "message": message,
+            }).encode())
+
+        elif parsed.path == "/v1/report":
             # The provider-agnostic reporting endpoint. See docs/EXTENDING.md.
             source = str(data.get("source") or "")[:32]
             session_id = str(data.get("session_id") or "")[:128]
@@ -1268,6 +1648,19 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
 
     if RENDER_MODE != "off":
+        local_input_url = ""
+        if os.environ.get("BUSYBAR_TRANSPORT", "usb") != "cloud":
+            local_input_url = ai_status.input_stream_url(
+                transport.base,
+                transport.headers.get("x-api-token", ""),
+            )
+            threading.Thread(
+                target=device_input_loop,
+                args=(local_input_url, stop,
+                      USB_SOURCE_IP if transport.base.startswith("http://10.0.4.20/")
+                      else None),
+                daemon=True,
+            ).start()
         threading.Thread(target=render_loop, args=(transport, stop), daemon=True).start()
         if AI_STATUS_ENABLED:
             AI_MONITOR = ai_status.Monitor(
@@ -1276,14 +1669,12 @@ def main():
                 url=AI_STATUS_URL,
                 x_url=X_STATUS_URL,
                 google_url=GOOGLE_STATUS_URL,
-                input_url=(ai_status.input_stream_url(
-                               transport.base,
-                               transport.headers.get("x-api-token", ""),
-                           )
-                           if os.environ.get("BUSYBAR_TRANSPORT", "usb") != "cloud"
-                           else ""),
+                input_url=local_input_url,
                 poll_s=AI_STATUS_POLL_S,
-                should_render=lambda: HUBLINK is None or HUBLINK.takeover,
+                should_render=lambda: (
+                    (HUBLINK is None or HUBLINK.takeover)
+                    and device_canvas_allowed()
+                ),
                 logger=log,
             )
             threading.Thread(target=AI_MONITOR.run, args=(stop,), daemon=True).start()
@@ -1292,6 +1683,8 @@ def main():
     log(f"listening on {LISTEN_ADDRS[0]}:{LISTEN_PORT}, render_mode={RENDER_MODE}, "
         f"style={STYLE}, transport={os.environ.get('BUSYBAR_TRANSPORT', 'usb')}, "
         f"ai_status={'on' if AI_STATUS_ENABLED else 'off'}, "
+        f"x_pulse={X_PULSE_BACKEND if X_PULSE_ENABLED else 'off'}, "
+        f"x_llm={X_PULSE_LLM_MODEL if X_PULSE_LLM_ENABLED else 'off'}, "
         f"hub_token={'on' if HUB_TOKEN else 'off'}, "
         f"role={ROLE}{' for ' + HUB_URL if STANDBY else ''}")
 

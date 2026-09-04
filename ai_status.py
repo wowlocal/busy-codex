@@ -150,6 +150,12 @@ def parse_input_events(state: bytes) -> list[tuple]:
                         elif field_wire == 0 and field == 2:
                             action = value
                     events.append(("button", button, action))
+                elif event_number == 2:  # InputEvent.switch_event
+                    position = 0  # proto3 enum default: BUSY
+                    for field, field_wire, value in _protobuf_fields(event):
+                        if field == 1 and field_wire == 0:
+                            position = value
+                    events.append(("switch", position))
                 elif event_number == 3:  # InputEvent.encoder_event
                     delta = 0
                     for field, field_wire, value in _protobuf_fields(event):
@@ -209,11 +215,12 @@ def _ws_recv(sock: socket.socket) -> tuple[int, bool, bytes]:
     return opcode, final, payload
 
 
-def _ws_connect(url: str) -> socket.socket:
+def _ws_connect(url: str, source_address: str | None = None) -> socket.socket:
     parsed = urllib.parse.urlsplit(url)
     host = parsed.hostname or ""
     port = parsed.port or (443 if parsed.scheme == "wss" else 80)
-    sock = socket.create_connection((host, port), timeout=3)
+    source = (source_address, 0) if source_address else None
+    sock = socket.create_connection((host, port), timeout=3, source_address=source)
     try:
         if parsed.scheme == "wss":
             sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)

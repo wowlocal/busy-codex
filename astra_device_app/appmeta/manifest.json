@@ -1,0 +1,9 @@
+{
+    "format_version": 1,
+    "id": "astra_watch_ai",
+    "name": "Astra AI",
+    "version": "1.2.0",
+    "description": "Personal Astra availability and AI-reviewed X rollout pulse",
+    "author": "Mike",
+    "heap_size_kib": 64
+}

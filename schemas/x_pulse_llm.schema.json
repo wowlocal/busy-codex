@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items"],
+  "properties": {
+    "items": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "surface", "state", "subject", "confidence", "basis"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^p[0-9]+$"},
+          "surface": {
+            "type": "string",
+            "enum": ["codex", "chatgpt", "api", "enterprise_early", "unknown"]
+          },
+          "state": {
+            "type": "string",
+            "enum": ["ready", "waiting", "loss", "unknown"]
+          },
+          "subject": {
+            "type": "string",
+            "enum": ["self", "second_hand", "official", "question", "unknown"]
+          },
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "basis": {
+            "type": "string",
+            "enum": [
+              "explicit_access",
+              "explicit_waiting",
+              "hands_on_use",
+              "product_mixed",
+              "second_hand",
+              "question",
+              "insufficient"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

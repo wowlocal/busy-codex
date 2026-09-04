@@ -28,13 +28,14 @@ macOS 直连 Bar，Windows 作为枢纽客户端经 Wi-Fi 转发；备用枢纽�
 ```
 ████████████████████████████   1px 环形灯带：预渲染 .anim 由固件原生 25fps 播放
 █  Fable 5 max      [██----] █   模型+effort │ 距离周重置的时间进度
-█  W [████████---]     WORK  █   周配额剩余进度条 │ 状态词（状态色）
+█  W [████████---] A   WORK  █   周配额 │ Astra 发布 │ 状态词
 ████████████████████████████
 ```
 
 **环形动画**（固件原生播放，与内置 keep_out 主题同一解码器，丝滑度一致）：
 - WORKING — 彩虹跑马灯（Claude Code 主题 rainbow_* 七色，逐像素渐变旋转，3.2s/圈）
 - Codex fast + WORKING — 黄色高速流动轮廓，无独立徽章，避免与文字重叠
+- GPT-6 Astra 可用 — 快速彩虹庆祝轮廓 + 五个白色高亮流星
 - THINKING — effortUltra 紫双波峰行波（2s 周期）
 - COMPLETE — 绿色呼吸（2.8s；30 秒后回落 IDLE）
 - WAIT — 橙色急促脉冲（0.88s）+ 设备状态 LED 同闪
@@ -47,6 +48,22 @@ max 紫 `effortUltra`(175,135,255)。
 
 **周重置进度条**：右上 20×4px，越接近重置越满（<50 绿 / ≥50 黄 / ≥80 橙 / ≥90 红）。
 **plan 剩余**：下方 `W` 进度条显示周配额余量，≤50% 黄、≤25% 橙、≤10% 红。
+
+**Astra 发布指示器**：`W` 进度条旁的 3×5 像素 `A` 读取个人
+`astra-watch` 插件状态。灰色表示等待，黄色表示服务端已返回但仍隐藏，绿色表示
+可选择，红色表示检查失败或超过 30 分钟未更新。可用时整个外框切换为庆祝动画；
+未安装 watcher 时指示器透明，不改变原有画面。
+
+## 独立 Astra Watch 应用
+
+固件 1.2.0 以上可运行 `python3 install_astra_app.py`，在 BUSY Bar 的 APPS
+菜单安装独立的 **Astra Watch**。打开时它会触发一次不产生推理费用的个人 Codex
+目录刷新，并显示 `WAIT/HIDDEN/READY/ERROR`、检查结果年龄，以及距离下一次后台
+检查的准确时间和进度。画面每 2 秒更新一次；应用打开时按 `OK` 可立即
+请求一次目录检查。`READY` 使用高速彩虹和白色流星动画。
+
+daemon 会通过本地状态 WebSocket 识别 APPS/SETTINGS 档位，暂时释放 agent canvas；
+返回 CUSTOM/BUSY 后自动恢复，因此 keepalive 不会覆盖设备菜单或 Astra 应用。
 
 ## AI 服务故障提醒
 

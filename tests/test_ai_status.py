@@ -142,8 +142,8 @@ class BusyInputTest(unittest.TestCase):
     @staticmethod
     def wrap_input_event(event):
         # State.updates(2) -> StateUpdate.input(11) -> InputEvent event.
-        input_event = bytes((0x0A if event[0] == "button" else 0x1A,
-                             len(event[1]))) + event[1]
+        tag = {"button": 0x0A, "switch": 0x12, "encoder": 0x1A}[event[0]]
+        input_event = bytes((tag, len(event[1]))) + event[1]
         update = bytes((0x5A, len(input_event))) + input_event
         return bytes((0x12, len(update))) + update
 
@@ -161,6 +161,10 @@ class BusyInputTest(unittest.TestCase):
         negative = self.wrap_input_event(("encoder", bytes((0x08, 0x01))))
         self.assertEqual([("encoder", 1)], ai_status.parse_input_events(positive))
         self.assertEqual([("encoder", -1)], ai_status.parse_input_events(negative))
+
+    def test_parses_switch_position(self):
+        state = self.wrap_input_event(("switch", bytes((0x08, 0x03))))
+        self.assertEqual([("switch", 3)], ai_status.parse_input_events(state))
 
     def test_buttons_select_items_and_ok_requests_refresh(self):
         class NullTransport:

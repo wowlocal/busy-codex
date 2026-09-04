@@ -18,7 +18,7 @@ the 72×16 front LED matrix with buttery-smooth native animations.
 ```
 ############################    1px per-pixel animated ring (.anim, 25 fps)
 #  Fable 5 max      [##----] #  model + effort · progress toward weekly reset
-#  W [########---]    WORK   #  weekly quota remaining · state word
+#  W [########---] A  WORK   #  weekly quota · Astra rollout · state word
 ############################
 ```
 
@@ -30,9 +30,24 @@ the 72×16 front LED matrix with buttery-smooth native animations.
 | **Model + effort** | e.g. `Fable 5 max`, colored with Claude Code's own theme palette per `/effort` level (`inactive` gray / `permission` blue / `warning` yellow / `fastMode` orange / `effortUltra` purple) |
 | **Reset progress** | Small top-right bar fills as the seven-day window approaches its reset; green → yellow → orange → red |
 | **Plan usage** | Large `W` bar shows weekly quota remaining; it shrinks and changes from green to yellow/orange/red as capacity runs low |
+| **Astra rollout** | Tiny pixel `A` beside the `W` bar: gray waiting, amber hidden, green available, red stale/error; availability starts a fast rainbow celebration around the display |
 | **State word** | `THINK / WORK / WAIT / ERR / FAIL / DONE / IDLE` |
 
 ![Ring only](docs/img/ring-only.png)
+
+### GPT-6 Astra rollout indicator
+
+With the personal `astra-watch` Codex plugin installed, the main agent screen
+reads its non-secret state from `~/.local/state/astra-watch/state.json`. A 3x5
+pixel `A` fits between the weekly quota gauge and the state word without taking
+space from the model label. When Astra becomes selectable, the `A` turns green
+and the normal agent contour becomes a fast rainbow celebration with five
+white-hot orbiting sparks.
+
+Override the state path with `BUSYBAR_ASTRA_STATE`.
+`BUSYBAR_ASTRA_STALE_S` controls when an unrefreshed result turns red (default:
+1800 seconds). If the watcher is not installed, the indicator remains
+transparent and the existing display is unchanged.
 
 ### AI provider outage overlay
 
@@ -130,6 +145,7 @@ opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 for app, animations in (
     ("claude_status", animgen.ANIMS),
     ("ai_provider_status", animgen.AI_STATUS_ANIMS),
+    ("astra_watch_ai", animgen.ASTRA_STATUS_ANIMS),
 ):
     for f, (gen, w, h, fps) in animations.items():
         frames = gen()
@@ -141,6 +157,7 @@ for app, animations in (
 PY
 
 python3 setup_claude.py install           # wire into Claude Code (backs up first)
+python3 install_astra_app.py              # optional Astra Watch entry in APPS
 ```
 
 Start a Claude Code session — the daemon auto-spawns on the first
@@ -278,14 +295,70 @@ python3 setup_claude.py install --hub http://<hub-name>.local:8765 --standby \
 - `install` ends with two probes — the hub, and the Bar with the key just
   written — so a wrong key or a closed port is caught right there.
 
-## The on-device app (waiting on firmware ≥ 1.2.0)
+## On-device apps (firmware ≥ 1.2.0)
 
-`device_app/` + `install_app.py` contain a complete **"Claude Status" JS
-app** for the device's APPS menu: it polls the daemon's `/status` over the
-USB network and renders locally. JS app support ships in firmware
-1.2.0-rc; on 1.1.1 the installer paths crash the firmware, so hold off
-until your device updates — then `python3 install_app.py` and set
-`RENDER_MODE=off`.
+- `device_app/` + `install_app.py` provide **Claude Status**, an alternative
+  JS renderer for the agent dashboard.
+- `astra_device_app/` + `install_astra_app.py` provide the standalone
+  **Astra Watch** entry in APPS. It requests a fresh non-inference catalog
+  check when opened. With `BUSYBAR_X_PULSE=1`, it also runs broad, focused
+  access-report, hands-on, and media searches plus an official OpenAI/employee search.
+  The default
+  `BUSYBAR_X_PULSE_BACKEND=bird` uses a local browser-cookie session through
+  the pinned Bird CLI and does not call the paid X API. Set
+  `BUSYBAR_X_PULSE_SSH_HOST=local` to run Bird beside the daemon, or an SSH
+  host to keep the session on another Mac. `xurl` remains available only via
+  the explicit `BUSYBAR_X_PULSE_BACKEND=xurl`; there is no automatic paid
+  fallback.
+  The bar color still comes only from the newest applicable `@OpenAI` wording.
+  Its fill and the `SEED` / `EARLY` / `GROWING` / `BROAD` / `WIDE` label use a
+  coarse evidence stage. ChatGPT, API, early-enterprise and ambiguous reports
+  are classified separately and never enter the Codex denominator. `R1/W1`
+  means one ready and one waiting Codex reporter; once the persistent waiting
+  panel observes transitions, `+3/12H` means three `WAITING -> READY` reports
+  in 12 hours. The stage is monotone unless an explicit rollback path is added;
+  an X complaint spike cannot move it backwards. X-only, unvalidated evidence
+  is capped at `EARLY` and quality `Q:L`; only an official all-users statement
+  can currently grant `WIDE`.
+
+  Each Bird poll merges broad discovery, focused access-report, hands-on, and
+  media searches, then deduplicates stable IDs and near-copied
+  launch posts locally. The focused retrieval prevents X's relevance ranking
+  from hiding short first-person access reports. `/hub` also exposes 6h/12h
+  ready and waiting counts, newest-ready age, fixed-panel size, signal activity,
+  classification yield, copy suppression, plan coverage, and auditable stage
+  promotion reasons. The explicit `xurl` backend instead uses a saved
+  `since_id`. Both retain a 30-day observation and fixed-panel history in
+  `BUSYBAR_X_PULSE_STATE` (default
+  `~/.local/state/astra-watch/x-pulse.json`). Raw post text and author IDs are
+  not persisted. The reporter share and its Wilson interval remain available
+  in `/hub` as diagnostics explicitly scoped to classified reporters, not as a
+  population estimate. X is checked every six hours by default. Bird uses
+  undocumented web GraphQL and may be rate-limited or broken by X changes;
+  use it read-only with a non-critical account. When `xurl` is selected,
+  OAuth tokens remain on the SSH host and reads are pay-per-use. `READY` gets the
+  high-energy rainbow animation. The display refreshes every 2 seconds;
+  press `OK` while it is open to refresh both the catalog and X pulse.
+
+  Set `BUSYBAR_X_PULSE_LLM=1` to send only new, high-priority ambiguous posts
+  through one cached Codex batch. The default `gpt-5.6-luna` at low effort can
+  be replaced with `BUSYBAR_X_PULSE_LLM_MODEL=gpt-5.6-terra`; there is no
+  automatic second-model fallback. The classifier runs ephemerally with user
+  config, rules, shell, browser, apps, computer use, image generation, and
+  multi-agent tools disabled. A strict output schema and a 0.95 acceptance
+  gate are enforced; errors fall back to deterministic rules. Reviewed text
+  hashes are cached, while raw posts remain unpersisted. A real Luna batch has
+  roughly 10k tokens of Codex harness overhead, so batching/caching matter.
+  When LLM assistance has reviewed the current window, the bottom row becomes
+  `AI<n> COLD/WARM/HOT/FIRE · Rn/Wn`, where `<n>` is the number of recent
+  candidates reviewed by the model. Temperature is an ordinal 12-hour momentum
+  signal; the top bar remains the separate rollout-evidence stage, colored by
+  the current temperature.
+
+In `auto` render mode the daemon observes the hardware selector through the
+local status WebSocket. It releases its agent canvas while APPS or SETTINGS is
+selected, then restores it on return to CUSTOM/BUSY, so native menus and the
+Astra app are never covered by keepalive redraws.
 
 ## Firmware field notes (1.1.1)
 
@@ -313,6 +386,9 @@ Things discovered the hard way, verified on-device:
   `/api/busy/profiles/{busy|custom}`.
 - `storage` API: write = POST raw body, remove = **DELETE**, rename takes
   `path` + `new_path`.
+- A running JS app keeps `scripts/main.js` open. The Astra installer compacts
+  the source below the firmware request limit and stages `main.js.next` before
+  replacing the entry file; exit/restart the app before installing an update.
 - Re-uploading an `.anim` that is currently being played fails with
   "Failed to open file for writing" — clear the element (freeing the file
   handle) before uploading.
@@ -322,13 +398,15 @@ Things discovered the hard way, verified on-device:
 | File | Purpose |
 | --- | --- |
 | `daemon.py` | session store + `/status` + device renderer (stdlib only) |
+| `x_pulse.py` | bounded X Recent Search over SSH + explicit-report classifier/cache |
 | `ai_status.py` | network-only AIWatch monitor + high-priority provider outage overlay |
 | `report.py` / `report.sh` | statusline/hook forwarder; auto-spawns the daemon, or forwards to a LAN hub when `BUSYBAR_HUB` is set (unless `BUSYBAR_STANDBY`) (`.py` = cross-platform, `.sh` = POSIX legacy) |
 | `setup_claude.py` | wire into / out of `~/.claude` (with backups); `--lan` / `--hub` / `--standby` / `--tag` / `--token` / `--style` for several computers |
 | `animgen.py` | `.anim` (bicycle0) encoder + agent-state and AI-alert contours |
 | `claude_card.py` | bind the CUSTOM key to the claude theme (and restore) |
-| `install_app.py`, `device_app/` | the future on-device JS app |
-| `screenshot.py` | grab the front display as an upscaled PNG |
+| `install_app.py`, `device_app/` | optional on-device Claude Status JS renderer |
+| `install_astra_app.py`, `astra_device_app/` | standalone Astra rollout monitor in the BUSY Bar APPS menu |
+| `screenshot.py` | grab either the front or back display as an upscaled PNG |
 | `docs/EXTENDING.md` | reporting protocol v1, adapter guide, transport guide (incl. BLE design) |
 | `adapters/codex_status.py` | Codex adapter (model/effort/speed, context %, quotas — all derived, no name tables) |
 | `adapters/install_codex_autostart.py` | hook the adapter into Codex's `notify` so it auto-starts on use |

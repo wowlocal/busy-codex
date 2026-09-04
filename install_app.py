@@ -12,6 +12,8 @@ Idempotent: safe to re-run after changing main.js or the animations.
 from __future__ import annotations
 
 import pathlib
+import http.client
+import os
 import struct
 import sys
 import time
@@ -20,12 +22,28 @@ import urllib.request
 import zlib
 
 BASE = "http://10.0.4.20/api"
+USB_SOURCE_IP = os.environ.get("BUSYBAR_USB_SOURCE_IP", "10.0.4.21").strip()
 APP_ID = "org.anthropic.claude_status"
 APP_ROOT = f"/ext/user_assets/{APP_ID}"
 CANVAS_APP = "claude_status"  # where the .anim assets live
 AI_CANVAS_APP = "ai_provider_status"
 HERE = pathlib.Path(__file__).parent
-OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+class SourceAddressHTTPHandler(urllib.request.HTTPHandler):
+    """Keep USB device traffic off VPNs that also advertise 10.0.4.0/24."""
+
+    def http_open(self, request):
+        def connection(host, **kwargs):
+            return http.client.HTTPConnection(
+                host, source_address=(USB_SOURCE_IP, 0), **kwargs,
+            )
+        return self.do_open(connection, request)
+
+
+OPENER = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}),
+    SourceAddressHTTPHandler(),
+)
 
 
 def api(method: str, path: str, body: bytes | None = None, retry: bool = True) -> bytes:

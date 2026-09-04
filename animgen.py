@@ -36,6 +36,7 @@ GREEN = (32, 192, 64)
 ORANGE = (255, 106, 0)
 RED = (255, 32, 32)
 GRAY = (80, 80, 80)
+ASTRA_BLUE = (110, 155, 255)
 
 
 # --------------------------------------------------------------------------
@@ -102,6 +103,38 @@ def anim_fast_working(n=40):
             2 * math.pi * (p / PERIMETER - 2 * f / n)
         )
         return scale(FAST_YELLOW, 0.38 + 0.62 * wave)
+
+    return [render_frame(lambda p, f=f: color(p, f)) for f in range(n)]
+
+
+def anim_astra_celebration(n=48):
+    """High-energy rainbow ring with five white-hot orbiting sparks."""
+    def color(p, f):
+        u = p / PERIMETER
+        phase = f / n
+        base = rainbow_at(4 * u - 3 * phase)
+        ripple = 0.58 + 0.42 * (0.5 + 0.5 * math.sin(
+            2 * math.pi * (9 * u + 5 * phase)
+        ))
+        spark = 0.0
+        for offset in (0.00, 0.17, 0.39, 0.61, 0.83):
+            center = (4 * phase + offset) % 1.0
+            distance = abs(((u - center + 0.5) % 1.0) - 0.5)
+            spark = max(spark, max(0.0, 1.0 - distance / 0.025) ** 2)
+        return lerp(scale(base, ripple), (255, 255, 255), spark)
+
+    return [render_frame(lambda p, f=f: color(p, f)) for f in range(n)]
+
+
+def anim_astra_waiting(n=60):
+    """Quiet steel-blue scanner: active monitoring without implying access."""
+    def color(p, f):
+        u = p / PERIMETER
+        phase = f / n
+        distance = abs(((u - phase + 0.5) % 1.0) - 0.5)
+        scanner = max(0.0, 1.0 - distance / 0.10) ** 3
+        breath = 0.72 + 0.28 * math.sin(2 * math.pi * phase)
+        return lerp(scale(GRAY, 0.34 * breath), ASTRA_BLUE, scanner)
 
     return [render_frame(lambda p, f=f: color(p, f)) for f in range(n)]
 
@@ -600,6 +633,7 @@ def anim_claude_theme(n=80):
 ANIMS = {
     "work.anim": (anim_working, W, H, FPS),
     "work_fast.anim": (anim_fast_working, W, H, FPS),
+    "astra.anim": (anim_astra_celebration, W, H, FPS),
     "think.anim": (anim_thinking, W, H, FPS),
     "done.anim": (anim_complete, W, H, FPS),
     "wait.anim": (anim_wait, W, H, FPS),
@@ -620,12 +654,22 @@ AI_STATUS_ANIMS = {
     "outage.anim": (anim_ai_down, W, H, FPS),
 }
 
+# Assets for the standalone on-device Astra Watch application.
+ASTRA_STATUS_ANIMS = {
+    "watch.anim": (anim_astra_waiting, W, H, FPS),
+    "hidden.anim": (anim_ai_degraded, W, H, FPS),
+    "ready.anim": (anim_astra_celebration, W, H, FPS),
+    "error.anim": (anim_error, W, H, FPS),
+    "offline.anim": (anim_idle, W, H, FPS),
+}
+
 
 def main():
     import pathlib
     out = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     out.mkdir(parents=True, exist_ok=True)
-    for fname, (gen, w, h, fps) in {**ANIMS, **AI_STATUS_ANIMS}.items():
+    animations = {**ANIMS, **AI_STATUS_ANIMS, **ASTRA_STATUS_ANIMS}
+    for fname, (gen, w, h, fps) in animations.items():
         frames = gen()
         blob = encode_anim(frames, fps=fps, w=w, h=h)
         decode_check(blob, frames, w=w, h=h)
