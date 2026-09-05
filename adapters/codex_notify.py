@@ -72,7 +72,7 @@ def main():
     report.ensure_daemon()
     ensure_adapter()
     # Push the turn's end state right now instead of waiting for the poll.
-    subprocess.run([sys.executable, str(HERE / "codex_status.py"), "--once"],
+    subprocess.run([sys.executable, str(HERE / "codex_status.py"), "--once", "--no-usage-refresh"],
                    timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return 0
 

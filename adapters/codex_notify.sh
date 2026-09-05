@@ -28,7 +28,7 @@ if ! pgrep -f "adapters/codex_status.py" >/dev/null 2>&1; then
 fi
 
 # 4. Push a fresh probe right now so the turn's end state lands instantly
-#    (the loop would catch it within 2s anyway; this removes even that).
-( /usr/bin/env python3 "$DIR/adapters/codex_status.py" --once >/dev/null 2>&1 & )
+#    Account usage is refreshed by the background adapter independently.
+( /usr/bin/env python3 "$DIR/adapters/codex_status.py" --once --no-usage-refresh >/dev/null 2>&1 & )
 
 exit 0

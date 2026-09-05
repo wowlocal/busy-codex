@@ -28,10 +28,50 @@ class WeekProgressTest(unittest.TestCase):
             99.9,
         )
 
-    def test_expired_or_missing_reset_is_empty(self):
+    def test_expired_or_missing_reset_is_unknown(self):
         now = 1_000_000.0
-        self.assertEqual(0.0, daemon.week_progress_pct({"resets_at": now}, now))
+        self.assertIsNone(daemon.week_progress_pct({"resets_at": now}, now))
         self.assertIsNone(daemon.week_progress_pct({}, now))
+
+    def test_short_window_is_never_selected_as_weekly(self):
+        short = {'name': '5h', 'window_minutes': 300, 'left_pct': 50,
+                 'resets_at': 1_010_000}
+        self.assertIsNone(daemon.weekly_quota([short]))
+        self.assertIsNone(daemon.week_progress_pct(short, 1_000_000))
+        self.assertIsNone(daemon.weekly_quota([{**short, 'name': '7d'}]))
+
+    def test_expired_data_never_becomes_a_full_quota(self):
+        store = daemon.Store()
+        store.report('test', 'a', {'state': 'WORKING', 'quotas': [
+            {'name': '7d', 'left_pct': 12, 'resets_at': 99},
+            {'name': '5h', 'left_pct': 30, 'resets_at': 999, 'valid_until': 99}]})
+        with mock.patch.object(daemon, 'STORE', store), \
+             mock.patch.object(daemon, 'EFFORT_CONTROLLER', None), \
+             mock.patch.object(daemon.time, 'time', return_value=100):
+            snapshot = daemon.status_snapshot()
+        self.assertEqual([None, None], [q['left_pct'] for q in snapshot['quotas']])
+        self.assertIsNone(snapshot['week_progress_pct'])
+
+    def test_progress_fill_is_cleared_on_reset_missing_data_and_zero_progress(self):
+        now = 1_000_000
+        for style in ('minimal', 'avatar'):
+            with mock.patch.object(daemon, 'STYLE', style), \
+                 mock.patch.object(daemon.time, 'time', return_value=now):
+                for quotas in (None,
+                    [{'name': '7d', 'left_pct': 25, 'resets_at': now}],
+                    [{'name': '7d', 'left_pct': None, 'resets_at': now + 500}],
+                    [{'name': '7d', 'left_pct': 100, 'resets_at': now + daemon.WEEK_SECONDS}]):
+                    elements = daemon.info_elements({'state': 'IDLE', 'quotas': quotas})
+                    fill = next(e for e in elements if e['id'] == 'cfill')
+                    self.assertEqual(['#00000000'], fill['fill_colors'])
+
+    def test_quota_parser_preserves_freshness_and_rejects_invalid_numbers(self):
+        valid = {'name': '7d', 'left_pct': 62.5, 'window_minutes': 10080,
+                 'resets_at': 2000, 'observed_at': 1000, 'valid_until': 1180}
+        self.assertEqual([valid], daemon.parse_quotas([valid]))
+        self.assertIsNone(daemon.parse_quotas('bad'))
+        for value in (float('nan'), float('inf'), True, '90', None):
+            self.assertIsNone(daemon.parse_quotas([{'left_pct': value}])[0]['left_pct'])
 
 
 class FastContourTest(unittest.TestCase):

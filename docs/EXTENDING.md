@@ -39,7 +39,8 @@ curl -X POST http://127.0.0.1:8765/v1/report -H 'Content-Type: application/json'
 | `label` | string ≤64 | no | line-1 text (tool/model name); ASCII; auto-trimmed to fit |
 | `label_color` | `#RRGGBB[AA]` | no | line-1 color (default white) |
 | `context_pct` | 0–100 | no | retained in the normalized status API; the front display prioritizes weekly quota gauges |
-| `quotas` | array | no | each `{name ≤6, left_pct 0-100, resets_at?: unix_s}`; the `7d` entry drives the large remaining-quota bar and the small reset-progress bar |
+| `quotas` | array | no | each `{name ≤6, left_pct: 0-100 or null, resets_at?: unix_s, window_minutes?, observed_at?: unix_s, valid_until?: unix_s}`; only a weekly window drives the two gauges; null/expired means unknown |
+| `quota_status` | object | no | diagnostic `source`, `limit_id`, `state`, `observed_at`, `error`; forwarded unchanged by standby mirrors |
 | `badges` | array of names | no | known: `fast`, which selects the yellow animated working contour; unknown names are ignored |
 | `ttl_s` | seconds | no | session forgotten after this silence (default 6h) |
 | `ended` | bool | no | `true` removes the session immediately |
@@ -64,7 +65,10 @@ Semantics:
   screen after 10 min.
 
 `GET /status` returns the same normalized shape (what the renderer and
-the on-device app consume); `GET /health` lists all live sessions.
+the on-device app consume), plus `week_progress_pct` and quota age. Reaching
+`resets_at` or `valid_until` clears that window's `left_pct` to null; the daemon
+never invents a replenished quota or advances the reset by seven days.
+`GET /health` lists all live sessions.
 
 ### Writing an adapter
 
@@ -75,14 +79,16 @@ An adapter is just "run curl at the right moments":
   the normalized schema (`claude_statusline_report()` in `daemon.py`).
   Claude's specialness — effort→color from the CLI's own palette, the
   model-follows-plan 5h/7d windows — is entirely inside that function.
-- **Codex CLI**: shipped — `adapters/codex_status.py`. Zero-config: it
-  reads `~/.codex/config.toml` and the newest session rollout, deriving
+- **Codex Desktop/CLI**: shipped — `adapters/codex_status.py`. Zero-config: it
+  reads `~/.codex/config.toml` and the selected task's rollout, deriving
   everything generically so model renames never break it: the label is
   prettified from the raw id (`gpt-5.6-sol` → `5.6 Sol` + effort),
   `service_tier` ≠ default becomes a badge (`fast` → yellow working contour),
   context % comes from `last_token_usage / model_context_window`, and
-  quotas from Codex's own `rate_limits` (names derived from
-  `window_minutes`: 10080 → `7d`). Run it alongside the daemon:
+  quotas from a separate `account/rateLimits/read` poll every minute, including
+  while idle. It selects the `codex` account bucket, names windows from
+  `windowDurationMins` (10080 → `7d`), and retains the actual reset and freshness
+  deadlines. Historical `token_count.rate_limits` are ignored. Run it alongside the daemon:
   `python3 adapters/codex_status.py` — or better, make it
   **auto-start**: `python3 adapters/install_codex_autostart.py install`
   wires Codex's `notify` hook to `adapters/codex_notify.py`

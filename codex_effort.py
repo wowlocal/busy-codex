@@ -1,4 +1,4 @@
-"""BUSY dial -> existing Codex Desktop task settings (no new turns).
+"""BUSY dial -> existing Codex Desktop or connected CLI settings (no new turns).
 
 Desktop IPC is private/versioned. Fail closed if its owner or snapshot protocol
 changes. Never resume a task, edit config.toml, or send a prompt as a fallback.
@@ -205,10 +205,14 @@ class DesktopIPC:
 
 
 class Controller:
-    def __init__(self, target, changed, home=None, logger=lambda _: None, allowed=lambda: True):
+    def __init__(self, target, changed, home=None, logger=lambda _: None, allowed=lambda: True,
+                 target_info=None):
         self.target = target
         self.changed = changed
         self.allowed = allowed
+        self.target_info = target_info or (lambda: {'kind': 'desktop'})
+        self.target_key = None
+        self.kind = 'desktop'
         self.home = Path(home or os.environ.get('CODEX_HOME', Path.home() / '.codex'))
         self.catalog = ModelCatalog(self.home)
         self.socket_path = os.environ.get('BUSYBAR_CODEX_IPC', str(self.home / 'ipc/ipc.sock'))
@@ -226,10 +230,16 @@ class Controller:
         self.direction = 1
         self.connected = False
 
+    def selection(self):
+        info = self.target_info()
+        target = info['thread_id'] if 'thread_id' in info else self.target()
+        return target, info, (target, info.get('kind'), info.get('socket'))
+
     def status(self):
         with self.lock:
             model, effort = model_effort(self.state)
             return {'enabled': True, 'connected': self.connected, 'thread_id': self.thread_id,
+                    'kind': self.kind,
                     'model': model, 'effort': effort, 'error': self.error,
                     'direction': self.direction,
                     'feedback_revision': self.feedback_revision,
@@ -238,9 +248,11 @@ class Controller:
     def rotate(self, delta):
         if not self.allowed():
             return False
-        target = self.target()
+        target, _, key = self.selection()
         with self.lock:
             if not target or target != self.thread_id or not self.connected:
+                return False
+            if self.target_key is not None and key != self.target_key:
                 return False
             self.pending = max(-32, min(32, self.pending + int(delta)))
             self.due = time.monotonic() + 0.12
@@ -257,13 +269,14 @@ class Controller:
         retry_at = 0
         try:
             while not stop.is_set():
-                target = self.target()
-                if target != self.thread_id:
+                target, info, target_key = self.selection()
+                if target_key != self.target_key:
                     if ipc:
                         ipc.close()
                         ipc = None
                     with self.lock:
                         self.thread_id = target
+                        self.target_key, self.kind = target_key, info.get('kind', 'desktop')
                         self.state, self.revision, self.pending = {}, None, 0
                         self.connected, self.feedback, self.error = False, None, ''
                     retry_at = 0
@@ -276,7 +289,11 @@ class Controller:
                     if ipc is None:
                         with self.lock:
                             self.state, self.revision, self.connected = {}, None, False
-                        ipc = DesktopIPC(self.socket_path, self.on_change)
+                        if info.get('kind') == 'cli':
+                            from codex_cli_client import CLIIPC
+                            ipc = CLIIPC(info['socket'], self.on_change)
+                        else:
+                            ipc = DesktopIPC(self.socket_path, self.on_change)
                         ipc.connect(target)
                         deadline = time.monotonic() + 3
                         while self.revision is None and time.monotonic() < deadline:
@@ -285,6 +302,8 @@ class Controller:
                             raise TimeoutError('No Codex task snapshot')
                         with self.lock:
                             self.error = ''
+                    if hasattr(ipc, 'poll'):
+                        ipc.poll()
                     if select.select([ipc.sock], [], [], 0.05)[0]:
                         ipc.receive()
                         continue
@@ -293,10 +312,11 @@ class Controller:
                         if delta:
                             self.pending = 0
                         state = copy.deepcopy(self.state)
-                    if not delta or self.target() != target or not self.allowed():
+                    if not delta or self.selection()[2] != target_key or not self.allowed():
                         continue
                     model, current = model_effort(state)
-                    levels = self.catalog.levels_for(model)
+                    levels = (ipc.levels_for(model) if hasattr(ipc, 'levels_for')
+                              else self.catalog.levels_for(model))
                     if current not in levels:
                         raise CatalogError(f'Current effort={current!r} absent from catalog '
                                            f'for model={model!r}; levels={levels}')

@@ -4,7 +4,7 @@
  * and renders onto the front display via the local HTTP API:
  *   - state ring: pre-rendered .anim assets played natively (smooth)
  *   - model + effort in the Claude Code /effort level color
- *   - ctx progress bar, paired 5h/7d plan usage, state word
+ *   - weekly reset progress, weekly quota remaining, state word
  *
  * The .anim assets are uploaded by install_app.py into the canvas app
  * "claude_status" (/ext/apps_assets/claude_status/), which is also the
@@ -89,18 +89,19 @@ function planColor(left) {
 
 function textEl(id, x, y, align, text, color) {
     return { id: id, type: "text", display: "front", x: x, y: y, align: align,
-             text: text, font: "small", color: color, timeout: TEXT_TIMEOUT };
+             text: text, font: "small", color: color, timeout: TEXT_TIMEOUT, z_index: 3 };
 }
 
 function rectEl(id, x, y, w, h, color) {
     return { id: id, type: "rectangle", display: "front", x: x, y: y,
              width: w, height: h, border_width: 0,
-             fill: "solid", fill_colors: [color], timeout: TEXT_TIMEOUT };
+             fill: "solid", fill_colors: [color], timeout: TEXT_TIMEOUT,
+             z_index: id === "cfill" || id === "qfill" ? 2 : 1 };
 }
 
 function infoElements(st) {
     /* Consumes the daemon's normalized /status shape:
-       {state, label, label_color, context_pct, quotas:[{name,left_pct}]} */
+       {state, label, label_color, week_progress_pct, quotas:[{name,left_pct}]} */
     var els = [];
     var state = st.state || "OFFLINE";
 
@@ -114,22 +115,30 @@ function infoElements(st) {
     }
 
     els.push(rectEl("ctrack", BAR_X, BAR_Y, BAR_W, BAR_H, "#262626FF"));
-    if (typeof st.context_pct === "number" && st.context_pct > 0) {
-        var fill = Math.round(BAR_W * st.context_pct / 100);
+    if (typeof st.week_progress_pct === "number" && st.week_progress_pct > 0) {
+        var fill = Math.round(BAR_W * st.week_progress_pct / 100);
         if (fill < 1) fill = 1;
         if (fill > BAR_W) fill = BAR_W;
-        els.push(rectEl("cfill", BAR_X, BAR_Y, fill, BAR_H, ctxColor(st.context_pct)));
+        els.push(rectEl("cfill", BAR_X, BAR_Y, fill, BAR_H, ctxColor(st.week_progress_pct)));
+    } else {
+        els.push(rectEl("cfill", BAR_X, BAR_Y, BAR_W, BAR_H, "#00000000"));
     }
 
     var quotas = st.quotas || [];
-    if (quotas.length) {
-        var parts = [], worst = 100;
-        for (var i = 0; i < quotas.length && i < 2; i++) {
-            parts.push(quotas[i].name + quotas[i].left_pct + "%");
-            if (quotas[i].left_pct < worst) worst = quotas[i].left_pct;
+    var weekly = null;
+    for (var i = 0; i < quotas.length; i++) {
+        var q = quotas[i];
+        if (q.window_minutes === 10080 || (q.window_minutes == null &&
+            ["7d", "week", "weekly", "wk"].indexOf(q.name) >= 0)) {
+            weekly = q;
+            break;
         }
-        els.push(textEl("usage", 3, 15, "bottom_left", parts.join(" "), planColor(worst)));
     }
+    var left = weekly && weekly.left_pct;
+    var known = typeof left === "number";
+    els.push(textEl("usage", 3, 15, "bottom_left",
+                   known ? "W " + Math.round(left) + "%" : "W ?",
+                   known ? planColor(left) : "#808080FF"));
 
     els.push(textEl("state", 69, 15, "bottom_right",
                     STATE_WORDS[state] || state, STATE_COLORS[state] || "#808080FF"));

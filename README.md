@@ -164,11 +164,43 @@ Start a Claude Code session — the daemon auto-spawns on the first
 statusline refresh and the display appears. `setup_claude.py uninstall`
 reverses everything.
 
-## Codex effort dial (Desktop)
+## Codex weekly usage
 
-The encoder changes the reasoning effort of the task open in Codex Desktop's
-primary window. Clockwise increases it, counterclockwise decreases it; the ends clamp.
-Supported levels come from that model's local Codex catalog. Quick turns are
+Weekly usage comes from Codex's documented
+[`account/rateLimits/read`](https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt)
+endpoint, refreshed every 60 seconds by the background adapter even when the
+selected task is idle. It reads the account's `codex` bucket from
+`rateLimitsByLimitId`; task history and other models' quota buckets cannot
+replace it. Windows are identified by duration, so the week can be either
+`primary` or `secondary` and a lone five-hour window never becomes a week.
+
+The large **W** bar is capacity remaining (`100 − usedPercent`). The small upper
+bar is elapsed time toward the API's actual weekly reset, not calendar-week
+progress or task context usage. A reset triggers an early account refresh.
+Expired data never implies 100% remaining: both fills clear and **?** appears
+until fresh data arrives. On a temporary read failure, the last confirmed
+snapshot remains usable for at most three minutes and never past its reset.
+
+The installed Codex executable handles authentication through the existing
+ChatGPT login. Each poll only initializes an app-server and reads account
+limits, then closes it. It does not start a task, call a model, or consume a
+reset credit. The Desktop-bundled executable is preferred on macOS, then
+`codex` on PATH; `BUSYBAR_CODEX_BIN` can override its location. Set
+`BUSYBAR_CODEX_LIMIT_ID` only to intentionally display another account bucket.
+
+`GET /status` exposes `quota_status` (source, bucket, freshness, timestamp and
+error), each window's `observed_at`/`valid_until`, and `week_progress_pct`.
+For a fresh one-off diagnostic, run `python3 adapters/codex_status.py --once -v`.
+Notify hooks use `--no-usage-refresh` so frequent turns do not multiply account
+requests or overwrite the background reader's usage data.
+
+## Codex effort dial (Desktop and CLI)
+
+The encoder follows the foreground app: the task open in Codex Desktop's
+primary window, or the focused terminal running `busy-codex-cli`.
+Clockwise increases effort, counterclockwise decreases it; the ends clamp.
+Supported levels come from that model's Codex catalog (the CLI's live
+`model/list` response, or Desktop's local cache). Quick turns are
 combined, and only a confirmed settings change triggers the blue animation.
 The new effort applies to subsequent turns; it does not interrupt a running
 answer or send a message. Bold, 12-pixel lettering slides into place over moving
@@ -197,11 +229,47 @@ mounts and unmounts. Background model output and auto-review sessions cannot
 select a task. The adapter follows the same selection and refreshes on tab
 changes even when the selected task is idle.
 
+For CLI control, install the launcher once from this repository:
+
+```bash
+mkdir -p ~/.local/bin
+ln -s "$(pwd)/codex_cli.py" ~/.local/bin/busy-codex-cli
+busy-codex-cli
+# Or continue an existing CLI task:
+busy-codex-cli resume <session-id>
+busy-codex-cli resume --last
+```
+
+It uses your existing `codex` command, configuration and login, and starts the
+BUSY Bar daemon/adapter as needed. `BUSYBAR_CODEX_CLI_BIN` can select another
+executable. A recent CLI with `--remote unix://` and `thread/settings/update`
+is required; this was verified with Codex 0.153.4. Existing standalone CLI
+processes must be exited and resumed through the launcher once, because their
+embedded server has no external settings connection.
+
+The launcher connects the TUI and dial to one local app-server through private
+Unix sockets. It forwards the TUI protocol, changes only effort, preserves
+collaboration mode, and waits for `thread/settings/updated` before showing
+success. Only session/settings/focus metadata is saved under
+`$CODEX_HOME/busybar-cli`; the bridge does not save prompts or answers.
+Normal CLI startup, resume and fork select the corresponding CLI task.
+If the CLI loads several task views (for example through its agent picker),
+control pauses: cached view switches are not exposed by the server protocol.
+Explicitly resuming a task restores an unambiguous target.
+
+On macOS, application identity comes from `NSWorkspace`, with terminal tab/pane
+focus supplied by the terminal's focus reports. Ghostty, Terminal, iTerm2,
+WezTerm, Kitty, Alacritty and Warp are recognized. Multiplexers must forward
+focus reports. If several launchers report focus, the dial pauses until one is
+unambiguous. On Linux it uses the single focused launcher. Switching to another
+app on macOS disables dial writes while keeping the last task and account
+usage visible. No Accessibility or Screen Recording permission is required.
+
 For an optional fixed task, set this in `env.sh` before starting both processes
 (manual launches should first source the file):
 
 ```bash
-export BUSYBAR_CODEX_THREAD_ID="<existing local Desktop task UUID>"
+export BUSYBAR_CODEX_THREAD_ID="<existing local task UUID>"
 ```
 
 `BUSYBAR_CODEX_THREAD_ID` pins the display/adapter and dial to that task. Without
@@ -217,8 +285,10 @@ It preserves the model, collaboration mode and other settings. It fails closed
 when the app disconnects, ownership or protocol changes, or the model catalog
 does not contain the current effort and no recent confirmed entry is available.
 Menus, Astra Watch and provider outage
-overlays retain their controls. CLI-only and remote tasks are not controlled.
-`GET /hub` includes `codex_focus` selection evidence and `codex_effort` connection,
+overlays retain their controls. Remote hosts and CLI processes started without
+the launcher are not controlled.
+`GET /hub` includes `codex_target` (Desktop/CLI selection), `codex_focus`
+(Desktop view evidence) and `codex_effort` connection,
 target, model, effort and errors. `BUSYBAR_CODEX_LOG_DIR` overrides the Desktop
 log directory. `BUSYBAR_CODEX_IPC` overrides the socket path; `BUSYBAR_CODEX_EFFORT=0` disables
 the controller without disabling the quota display.
@@ -468,6 +538,9 @@ Things discovered the hard way, verified on-device:
 | `screenshot.py` | grab either the front or back display as an upscaled PNG |
 | `docs/EXTENDING.md` | reporting protocol v1, adapter guide, transport guide (incl. BLE design) |
 | `adapters/codex_status.py` | Codex adapter (model/effort/speed, context %, quotas — all derived, no name tables) |
+| `codex_usage.py` | Account-level quota polling with bounded freshness and reset-aware refreshes |
+| `codex_cli.py` | CLI launcher and local app-server bridge for live effort changes |
+| `codex_target.py` | Foreground Desktop/terminal selection shared by the adapter and dial |
 | `adapters/install_codex_autostart.py` | hook the adapter into Codex's `notify` so it auto-starts on use |
 | `install_theme.py` | install the on-device "claude" theme (ring + typing companion) |
 

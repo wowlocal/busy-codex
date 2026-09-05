@@ -2,8 +2,10 @@ import json
 import pathlib
 import tempfile
 import unittest
+from unittest import mock
 
 from adapters import codex_status
+import codex_usage
 
 
 class RolloutSnapshotTest(unittest.TestCase):
@@ -47,7 +49,7 @@ class RolloutSnapshotTest(unittest.TestCase):
             self.assertEqual("gpt-5.6-sol", snapshot["model"])
             self.assertEqual("xhigh", snapshot["effort"])
             self.assertEqual("WORKING", snapshot["state"])
-            self.assertEqual(17, snapshot["limits"]["primary"]["used_percent"])
+            self.assertNotIn("limits", snapshot)  # task history is not account usage
 
             self.append(
                 rollout,
@@ -60,6 +62,33 @@ class RolloutSnapshotTest(unittest.TestCase):
                 {"type": "event_msg", "payload": {"type": "task_started"}},
             )
             self.assertEqual("WORKING", codex_status._rollout_snapshot(rollout)["state"])
+
+    def test_task_reports_use_account_snapshot_and_hooks_do_not_overwrite_it(self):
+        usage = {'quotas': [{'name': '7d', 'left_pct': 62}],
+                 'quota_status': {'source': 'codex-account'}}
+        with mock.patch.object(codex_status, 'newest_rollout', return_value=None), \
+             mock.patch.object(codex_status, 'config_defaults', return_value={'model': 'gpt-test'}):
+            self.assertEqual(usage['quotas'], codex_status.probe(usage)['quotas'])
+            self.assertNotIn('quotas', codex_status.probe())
+
+    def test_new_account_usage_is_reported_without_rollout_activity(self):
+        values = iter((38, 45))
+        monitor = codex_usage.Monitor(fetch=lambda _: {'rateLimits': {'primary': {
+            'usedPercent': next(values), 'windowDurationMins': 10080}}})
+        monitor.refresh()
+        stop = mock.Mock()
+        stop.is_set.side_effect = (False, False, True)
+        waits = []
+        def wait(_):
+            if not waits:
+                monitor.refresh()
+            waits.append(True)
+        stop.wait.side_effect = wait
+        with mock.patch.object(codex_status, 'newest_rollout', return_value=None), \
+             mock.patch.object(codex_status, '_emit') as emit:
+            codex_status.watch(monitor, stop, False)
+        self.assertEqual([62, 55], [call.args[1]['quotas'][0]['left_pct']
+                                   for call in emit.call_args_list])
 
 
 if __name__ == "__main__":

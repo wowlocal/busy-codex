@@ -31,6 +31,7 @@ from __future__ import annotations
 import hmac
 import http.client
 import json
+import math
 import os
 import re
 import secrets
@@ -48,6 +49,7 @@ import ai_status
 import x_pulse
 import codex_effort
 import codex_focus
+import codex_target
 import effort_animation
 
 # --------------------------------------------------------------------------
@@ -414,7 +416,7 @@ class Store:
     def report(self, source: str, session_id: str, fields: dict,
                mirrored: bool = False) -> bool:
         """Merge a normalized report. `fields` may contain: state, label,
-        label_color, context_pct, quotas, badges, host, host_tag, ttl_s,
+        label_color, context_pct, quotas, quota_status, badges, host, host_tag, ttl_s,
         ended - and, from a standby's mirror only: rev, lease_s, focus_ts,
         state_ts, last_active (the hub derives these from ages)."""
         key = f"{source}:{session_id}"
@@ -443,7 +445,7 @@ class Store:
                     "source": source, "state": "IDLE", "state_ts": 0.0,
                     "last_active": 0.0, "focus_ts": 0.0, "seen_ts": 0.0,
                     "label": None, "label_color": None,
-                    "context_pct": None, "quotas": None, "badges": None,
+                    "context_pct": None, "quotas": None, "quota_status": None, "badges": None,
                     "host": None, "host_tag": None, "ttl_s": DEFAULT_TTL_S,
                     "rev": 0, "mirrored": False, "lease_s": None,
                 })
@@ -459,7 +461,7 @@ class Store:
                     s["state_ts"] = fields.get("state_ts", now)
                 if "focus_ts" in fields:
                     s["focus_ts"] = fields["focus_ts"]   # mirrored: the origin decided
-                for k in ("label", "label_color", "context_pct", "quotas",
+                for k in ("label", "label_color", "context_pct", "quotas", "quota_status",
                           "badges", "host", "host_tag", "ttl_s", "control_thread_id"):
                     if k in fields:
                         s[k] = fields[k]
@@ -514,7 +516,16 @@ def effort_target():
     pinned = os.environ.get("BUSYBAR_CODEX_THREAD_ID", "")
     if pinned:
         return pinned if re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", pinned) else None
-    return codex_focus.FOCUS.current(force=True)
+    return codex_target.FOCUS.current(force=True)
+
+
+def effort_target_info():
+    pinned = os.environ.get("BUSYBAR_CODEX_THREAD_ID", "")
+    if pinned:
+        record = next((r for r in codex_target.cli_sessions(codex_target.FOCUS.home)
+                       if r.get("thread_id") == pinned), None)
+        return {**record, "kind": "cli"} if record else {"kind": "desktop", "thread_id": effort_target()}
+    return codex_target.FOCUS.status()
 
 
 def effort_input_allowed():
@@ -530,7 +541,7 @@ def effort_input_allowed():
 # Standby role: mirror every session to the hub, render only while it is down
 # --------------------------------------------------------------------------
 
-MIRROR_FIELDS = ("label", "label_color", "context_pct", "quotas", "badges",
+MIRROR_FIELDS = ("label", "label_color", "context_pct", "quotas", "quota_status", "badges",
                  "host", "host_tag", "ttl_s")
 RENDER_LOCK = threading.Lock()   # one canvas transaction at a time (a yield waits on it)
 DRAWN = threading.Event()        # what is on the Bar right now was painted by us
@@ -808,12 +819,17 @@ def status_snapshot() -> dict:
     now = time.time()
     quotas = []
     for q in sess.get("quotas") or []:
-        left = q.get("left_pct")
-        # A quota window whose reset time has passed is back to full.
-        if q.get("resets_at") and q["resets_at"] <= now:
-            left = 100
-        quotas.append({"name": q.get("name", ""), "left_pct": left,
-                       "resets_at": q.get("resets_at")})
+        q = dict(q)
+        if quota_expired(q, now):
+            q["left_pct"] = None  # a passed reset is not a fresh account snapshot
+        quotas.append(q)
+    quota_status = dict(sess.get("quota_status") or {})
+    if quota_status:
+        if not any(q.get("left_pct") is not None for q in quotas):
+            quota_status["state"] = "unavailable"
+        observed_at = quota_status.get("observed_at")
+        if finite_number(observed_at):
+            quota_status["age_s"] = max(0, round(now - observed_at, 1))
     label = sess.get("label")
     if EFFORT_CONTROLLER:
         control = EFFORT_CONTROLLER.status()
@@ -829,6 +845,8 @@ def status_snapshot() -> dict:
         "label_color": sess.get("label_color"),
         "context_pct": sess.get("context_pct"),
         "quotas": quotas or None,
+        "quota_status": quota_status or None,
+        "week_progress_pct": week_progress_pct(weekly_quota(quotas), now),
         "badges": sess.get("badges"),
         "host": sess.get("host"),
         "host_tag": sess.get("host_tag"),
@@ -960,16 +978,53 @@ def quota_bar_color(left: float) -> str:
     return "#20C040FF"
 
 
+def finite_number(value):
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value))
+
+
+def parse_quotas(value):
+    quotas = []
+    for q in value[:4] if isinstance(value, list) else []:
+        if not isinstance(q, dict):
+            continue
+        left = q.get("left_pct")
+        item = {"name": str(q.get("name", ""))[:6],
+                "left_pct": max(0., min(100., left)) if finite_number(left) else None}
+        for field in ("resets_at", "window_minutes", "observed_at", "valid_until"):
+            number = q.get(field)
+            if finite_number(number) and number > 0:
+                item[field] = number
+        quotas.append(item)
+    return quotas or None
+
+
+def quota_expired(quota, now):
+    return any(finite_number(quota.get(key)) and quota[key] <= now
+               for key in ("resets_at", "valid_until"))
+
+
+def weekly_quota(quotas):
+    for quota in quotas or []:
+        minutes = quota.get("window_minutes")
+        if minutes == WEEK_SECONDS / 60 or (minutes is None and
+                str(quota.get("name", "")).lower() in ("7d", "week", "weekly", "wk")):
+            return quota
+    return None  # a lone 5h window must never be rendered as a week
+
+
 def week_progress_pct(quota: dict | None, now: float | None = None) -> float | None:
     """How far the current seven-day window has advanced toward its reset."""
-    if not quota or not isinstance(quota.get("resets_at"), (int, float)):
+    if not quota or not finite_number(quota.get("resets_at")):
         return None
     now = time.time() if now is None else now
+    if quota_expired(quota, now) or ("left_pct" in quota and quota["left_pct"] is None):
+        return None
+    minutes = quota.get("window_minutes", WEEK_SECONDS / 60)
+    if minutes != WEEK_SECONDS / 60:
+        return None
     seconds_left = quota["resets_at"] - now
-    if seconds_left <= 0:
-        return 0.0
-    seconds_left = min(WEEK_SECONDS, seconds_left)
-    return 100.0 * (1.0 - seconds_left / WEEK_SECONDS)
+    return max(0., min(100., 100. * (1. - seconds_left / (minutes * 60))))
 
 
 def astra_availability(path: str | None = None, now: float | None = None) -> dict:
@@ -1245,9 +1300,8 @@ def info_elements(status: dict, astra: dict | None = None) -> list[dict]:
     if kind == "text":
         x += 2 + est_width(tag)
     elements.append(_rect("hflag", 1, 2, 2, 5, tag if kind == "flag" else "#00000000"))
-    quotas = [q for q in (status.get("quotas") or []) if q.get("left_pct") is not None]
-    weekly = next((q for q in quotas if str(q.get("name", "")).lower()
-                   in ("7d", "week", "weekly", "wk")), quotas[-1] if quotas else None)
+    quotas = status.get("quotas") or []
+    weekly = weekly_quota(quotas)
     week_progress = week_progress_pct(weekly)
     if avatar:
         # Vertical week-progress gauge between the text column and avatar.
@@ -1256,14 +1310,18 @@ def info_elements(status: dict, astra: dict | None = None) -> list[dict]:
             fh = max(1, min(14, round(14 * week_progress / 100)))
             elements.append(_rect("cfill", AVATAR_X - 4, 15 - fh, 2, fh,
                                   bar_color(week_progress)))
+        else:
+            elements.append(_rect("cfill", AVATAR_X - 4, 1, 2, 14, "#00000000"))
     else:
         elements.append(_rect("ctrack", BAR_X, BAR_Y, BAR_W, BAR_H, BAR_TRACK_COLOR))
         if week_progress is not None and week_progress > 0:
             fill = max(1, min(BAR_W, round(BAR_W * week_progress / 100)))
             elements.append(_rect("cfill", BAR_X, BAR_Y, fill, BAR_H,
                                   bar_color(week_progress)))
+        else:
+            elements.append(_rect("cfill", BAR_X, BAR_Y, BAR_W, BAR_H, "#00000000"))
 
-    if weekly:
+    if weekly and weekly.get("left_pct") is not None and not quota_expired(weekly, time.time()):
         left = max(0.0, min(100.0, float(weekly["left_pct"])))
         color = quota_bar_color(left)
         fill = max(1, min(QUOTA_BAR_W, round(QUOTA_BAR_W * left / 100)))
@@ -1275,9 +1333,10 @@ def info_elements(status: dict, astra: dict | None = None) -> list[dict]:
                               color if left > 0 else "#00000000"))
     else:
         # Keep element ids and types stable while clearing a previous quota.
-        elements.append(_text("usage", 3, 15, "bottom_left", " ", QUOTA_COLOR))
+        unknown = bool(quotas or status.get("quota_status"))
+        elements.append(_text("usage", 3, 15, "bottom_left", "?" if unknown else " ", QUOTA_COLOR))
         elements.append(_rect("qtrack", QUOTA_BAR_X, QUOTA_BAR_Y,
-                              QUOTA_BAR_W, QUOTA_BAR_H, "#00000000"))
+                              QUOTA_BAR_W, QUOTA_BAR_H, BAR_TRACK_COLOR if unknown else "#00000000"))
         elements.append(_rect("qfill", QUOTA_BAR_X, QUOTA_BAR_Y,
                               1, QUOTA_BAR_H, "#00000000"))
 
@@ -1426,7 +1485,7 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                                        "priority": DRAW_PRIORITY, "elements": anims}):
                         last_anim, last_anim_ts = anim["path"], now
                         DRAWN.set()
-                texts = [{**element, "z_index": 1}
+                texts = [{**element, "z_index": 2 if element["id"] in ("cfill", "qfill") else 1}
                          for element in info_elements(status, astra)]
                 encoded = json.dumps(texts, sort_keys=True)
                 if encoded != last_texts or now - last_texts_ts > KEEPALIVE_S:
@@ -1501,6 +1560,7 @@ class Handler(BaseHTTPRequestHandler):
                 "codex_effort": (EFFORT_CONTROLLER.status() if EFFORT_CONTROLLER
                                  else {"enabled": False}),
                 "codex_focus": codex_focus.FOCUS.status(),
+                "codex_target": codex_target.FOCUS.status(),
                 "device_ok": TRANSPORT.device_ok if TRANSPORT else None,
                 "device_error": TRANSPORT.last_error if TRANSPORT else "",
                 "rendering": DRAWN.is_set(),
@@ -1579,13 +1639,14 @@ class Handler(BaseHTTPRequestHandler):
                 except (TypeError, ValueError, OverflowError):
                     pass
             if "quotas" in data:
-                qs = data["quotas"] or []
-                fields["quotas"] = [
-                    {"name": str(q.get("name", ""))[:6],
-                     "left_pct": max(0, min(100, round(q["left_pct"]))),
-                     "resets_at": q.get("resets_at")}
-                    for q in qs[:4] if isinstance(q, dict) and q.get("left_pct") is not None
-                ] or None
+                fields["quotas"] = parse_quotas(data["quotas"])
+            if "quota_status" in data:
+                qs = data["quota_status"]
+                fields["quota_status"] = ({
+                    **{key: str(qs.get(key) or "")[:180]
+                       for key in ("source", "limit_id", "state", "error")},
+                    "observed_at": qs.get("observed_at") if finite_number(qs.get("observed_at")) else None,
+                } if isinstance(qs, dict) else None)
             if "badges" in data:
                 bs = data["badges"] or []
                 fields["badges"] = [str(b)[:12] for b in bs[:4]] or None
@@ -1739,7 +1800,8 @@ def main():
     if RENDER_MODE != "off":
         if os.environ.get("BUSYBAR_CODEX_EFFORT", "1").lower() not in ("0", "false", "off"):
             EFFORT_CONTROLLER = codex_effort.Controller(effort_target, STORE.dirty.set,
-                                                       logger=log, allowed=effort_input_allowed)
+                                                       logger=log, allowed=effort_input_allowed,
+                                                       target_info=effort_target_info)
             threading.Thread(target=EFFORT_CONTROLLER.run, args=(stop,), daemon=True).start()
         local_input_url = ""
         if os.environ.get("BUSYBAR_TRANSPORT", "usb") != "cloud":

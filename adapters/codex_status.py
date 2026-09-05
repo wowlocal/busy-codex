@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Codex CLI adapter for the busybar daemon.
+"""Codex Desktop/CLI adapter for the busybar daemon.
 
 Zero-config and rename-proof: everything is derived from what Codex
-itself writes (config.toml defaults + the newest session rollout under
-~/.codex/sessions). No model-name tables anywhere:
+itself reports (config defaults, the selected task's rollout and the
+account/rateLimits/read API). No model-name tables anywhere:
 
   - label:   the raw model id, prettified by GENERIC rules only
              ("gpt-5.6-sol" -> "5.6 Sol"; a future "gpt-7-luna" ->
@@ -11,12 +11,12 @@ itself writes (config.toml defaults + the newest session rollout under
   - badges:  service_tier other than default becomes a badge
              ("fast" selects the yellow high-speed working contour)
   - context: last_token_usage.total_tokens / model_context_window
-  - quotas:  Codex's own rate_limits windows, named from window_minutes
+  - quotas:  fresh account windows, independent of selected task/activity
              (600 -> "10h", 10080 -> "7d") - names survive plan changes
   - state:   Codex task_started / task_complete lifecycle events
 
 Usage:
-    python3 adapters/codex_status.py            # loop, report every 2s
+    python3 adapters/codex_status.py            # watch task + refresh quotas every minute
     python3 adapters/codex_status.py --once -v  # single probe, print it
 """
 
@@ -25,17 +25,22 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import signal
 import sys
+import threading
 import time
 import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import report  # noqa: E402  (daemon/hub address + host headers from env.sh)
 import codex_focus
+import codex_target
+import codex_usage
 
 DAEMON = report.BASE + "/v1/report"
-CODEX_HOME = pathlib.Path.home() / ".codex"
+CODEX_HOME = pathlib.Path(report.ENV.get("CODEX_HOME", pathlib.Path.home() / ".codex"))
 SESSIONS = CODEX_HOME / "sessions"
+TARGET = codex_target.Target(CODEX_HOME)
 
 QUIET_RECHECK_S = 8  # one final read after the rollout stops changing
 COMPLETE_S = 120     # fallback for old rollouts without lifecycle events
@@ -47,7 +52,7 @@ VENDOR_PREFIXES = ("gpt-", "chatgpt-", "openai-")
 def _empty_snapshot() -> dict:
     return {
         "model": None, "effort": None, "tier": None,
-        "info": None, "limits": None, "state": None,
+        "info": None, "state": None,
     }
 
 
@@ -74,11 +79,6 @@ def prettify_model(model: str) -> str:
     return " ".join(p for p in parts if p)
 
 
-def window_name(minutes: float) -> str:
-    hours = minutes / 60
-    return f"{round(hours)}h" if hours < 48 else f"{round(hours / 24)}d"
-
-
 def config_defaults() -> dict:
     """Minimal TOML pluck of the keys we need (no toml dependency)."""
     out = {}
@@ -95,8 +95,17 @@ def config_defaults() -> dict:
 _FOCUSED_ROLLOUTS = {}
 
 
-def newest_rollout() -> pathlib.Path | None:
-    target = report.ENV.get("BUSYBAR_CODEX_THREAD_ID", "") or codex_focus.FOCUS.current()
+def selected_target():
+    pinned = report.ENV.get("BUSYBAR_CODEX_THREAD_ID", "")
+    if pinned:
+        record = next((r for r in codex_target.cli_sessions(CODEX_HOME)
+                       if r.get('thread_id') == pinned), None)
+        return {**record, 'kind': 'cli'} if record else {'kind': 'desktop', 'thread_id': pinned}
+    return TARGET.display()
+
+
+def newest_rollout(selection=None) -> pathlib.Path | None:
+    target = (selection if selection is not None else selected_target()).get('thread_id')
     if target:
         path = _FOCUSED_ROLLOUTS.get(target)
         if path and path.exists():
@@ -141,8 +150,6 @@ def _apply_event(snapshot: dict, event: dict) -> None:
     elif event_type == "token_count":
         if isinstance(payload.get("info"), dict):
             snapshot["info"] = payload["info"]
-        if isinstance(payload.get("rate_limits"), dict):
-            snapshot["limits"] = payload["rate_limits"]
 
 
 def _rollout_snapshot(path: pathlib.Path) -> dict:
@@ -177,22 +184,21 @@ def _rollout_snapshot(path: pathlib.Path) -> dict:
     return dict(_ROLLOUT_CACHE["snapshot"])
 
 
-def probe() -> dict | None:
-    rollout = newest_rollout()
+def probe(usage=None) -> dict | None:
+    target = selected_target()
+    rollout = newest_rollout(target)
     defaults = config_defaults()
-    if rollout is None and not defaults:
+    if rollout is None and not defaults and not target.get('model'):
         return None
 
     model = defaults.get("model")
     effort = defaults.get("model_reasoning_effort")
     tier = defaults.get("service_tier")
     context_pct = None
-    quotas = None
     state = "IDLE"
-    session_id = "config"
+    session_id = target.get('thread_id') or 'config'
 
     if rollout is not None:
-        session_id = rollout.stem.split("rollout-")[-1][:64]
         age = time.time() - rollout.stat().st_mtime
         snapshot = _rollout_snapshot(rollout)
         state = snapshot["state"] or (
@@ -204,25 +210,16 @@ def probe() -> dict | None:
         tier = snapshot["tier"] or tier
 
         info = snapshot["info"]
-        limits = snapshot["limits"]
         if info:
             window = info.get("model_context_window")
             last = (info.get("last_token_usage") or {}).get("total_tokens")
             if window and last:
                 context_pct = round(min(100, last * 100 / window), 1)
 
-        if limits:
-            quotas = []
-            for k in ("primary", "secondary"):
-                w = limits.get(k) or {}
-                if w.get("used_percent") is not None and w.get("window_minutes"):
-                    quotas.append({
-                        "name": window_name(w["window_minutes"]),
-                        "left_pct": max(0, round(100 - w["used_percent"])),
-                        "resets_at": w.get("resets_at"),
-                    })
-            quotas = quotas or None
-
+    if target.get('kind') == 'cli':
+        model, effort = target.get('model'), target.get('effort')
+        state, context_pct = target.get('state', 'IDLE'), target.get('context_pct')
+        tier = next(iter(target.get('badges') or []), None)
     if not model:
         return None
 
@@ -238,10 +235,12 @@ def probe() -> dict | None:
     meta = rollout_metadata(rollout) if rollout else {}
     return {
         "source": "codex", "session_id": session_id, "state": state,
-        "control_thread_id": (meta.get("id") if meta.get("originator") == "Codex Desktop"
+        "control_thread_id": (target['thread_id'] if target.get('kind') == 'cli' and target.get('ready')
+                              else meta.get("id") if meta.get("originator") == "Codex Desktop"
                               and meta.get("source") == "vscode" else None),
-        "label": label, "context_pct": context_pct, "quotas": quotas,
+        "label": label, "context_pct": context_pct,
         "badges": badges, "ttl_s": 600,
+        **(usage or {}),
     }
 
 
@@ -259,8 +258,8 @@ def post(report: dict) -> bool:
         return False
 
 
-def _emit(verbose: bool):
-    report = probe()
+def _emit(verbose: bool, usage=None):
+    report = probe(usage)
     if report:
         if verbose:
             print(json.dumps(report, ensure_ascii=False), flush=True)
@@ -273,34 +272,57 @@ def main():
     once = "--once" in sys.argv
     verbose = "-v" in sys.argv
     if once:
-        _emit(verbose)
+        # Notify hooks leave account polling to the existing background adapter.
+        # A manual --once still provides a fresh, self-contained diagnostic.
+        usage = None
+        if "--no-usage-refresh" not in sys.argv:
+            monitor = codex_usage.Monitor(report.ENV)
+            monitor.refresh()
+            usage = monitor.snapshot()
+        _emit(verbose, usage)
         return
-    # Report only while the rollout changes, plus one quiet recheck. State is
-    # taken from lifecycle events, so a long silent reasoning/tool interval
-    # remains WORKING until Codex actually writes task_complete.
+    monitor = codex_usage.Monitor(report.ENV)
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    worker = threading.Thread(target=monitor.run, args=(stop,), daemon=True)
+    worker.start()
+    try:
+        watch(monitor, stop, verbose)
+    finally:
+        stop.set()
+        worker.join(timeout=4)
+
+
+def watch(monitor, stop, verbose):
+    # Quota updates also trigger a report while the selected task is idle.
     last_stamp = None
     previous = None
     last_report_at = 0
     quiet_rechecked = False
-    while True:
-        rollout = newest_rollout()
+    while not stop.is_set():
+        target = selected_target()
+        rollout = newest_rollout(target)
         stat = rollout.stat() if rollout else None
-        stamp = (rollout, stat.st_mtime_ns, stat.st_size) if stat else None
-        if rollout != previous:
+        session_id = target.get('thread_id') or 'config'
+        stamp = (session_id, target.get('model'), target.get('effort'), target.get('state'),
+                 target.get('context_pct'), stat.st_mtime_ns if stat else None, stat.st_size if stat else None)
+        if session_id != previous:
             if previous:
-                post({"source": "codex", "session_id": previous.stem.split("rollout-")[-1][:64],
-                      "ended": True})
-            previous = rollout
-        if stamp != last_stamp or time.time() - last_report_at >= 20:
+                post({"source": "codex", "session_id": previous, "ended": True})
+            previous = session_id
+        if (stamp != last_stamp or monitor.changed.is_set()
+                or time.time() - last_report_at >= 20):
+            monitor.changed.clear()
             last_stamp = stamp
             last_report_at = time.time()
             quiet_rechecked = False
-            _emit(verbose)
+            _emit(verbose, monitor.snapshot())
         elif (not quiet_rechecked and stat is not None
               and time.time() - stat.st_mtime > QUIET_RECHECK_S):
-            _emit(verbose)
+            _emit(verbose, monitor.snapshot())
             quiet_rechecked = True
-        time.sleep(POLL_S)
+        stop.wait(POLL_S)
 
 
 if __name__ == "__main__":
