@@ -46,6 +46,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import ai_status
 import x_pulse
+import codex_effort
+import codex_focus
+import effort_animation
 
 # --------------------------------------------------------------------------
 # Config
@@ -457,7 +460,7 @@ class Store:
                 if "focus_ts" in fields:
                     s["focus_ts"] = fields["focus_ts"]   # mirrored: the origin decided
                 for k in ("label", "label_color", "context_pct", "quotas",
-                          "badges", "host", "host_tag", "ttl_s"):
+                          "badges", "host", "host_tag", "ttl_s", "control_thread_id"):
                     if k in fields:
                         s[k] = fields[k]
                 s["lease_s"] = fields.get("lease_s") if mirrored else None
@@ -504,6 +507,23 @@ DEVICE_INPUT_LOCK = threading.Lock()
 DEVICE_MODE: str | None = None
 DEVICE_INPUT_CONNECTED = False
 DEVICE_INPUT_ERROR = ""
+EFFORT_CONTROLLER = None
+
+
+def effort_target():
+    pinned = os.environ.get("BUSYBAR_CODEX_THREAD_ID", "")
+    if pinned:
+        return pinned if re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", pinned) else None
+    return codex_focus.FOCUS.current(force=True)
+
+
+def effort_input_allowed():
+    session = STORE.active_session()
+    return (session is not None and session.get("control_thread_id") == effort_target()
+            and session.get("control_thread_id") is not None
+            and device_canvas_allowed() and DEVICE_MODE not in ("OFF", "UNKNOWN")
+            and DRAWN.is_set() and not (AI_MONITOR and AI_MONITOR.drawn)
+            and (HUBLINK is None or HUBLINK.takeover))
 
 
 # --------------------------------------------------------------------------
@@ -794,10 +814,18 @@ def status_snapshot() -> dict:
             left = 100
         quotas.append({"name": q.get("name", ""), "left_pct": left,
                        "resets_at": q.get("resets_at")})
+    label = sess.get("label")
+    if EFFORT_CONTROLLER:
+        control = EFFORT_CONTROLLER.status()
+        if (control["connected"] and control["thread_id"] == sess.get("control_thread_id")
+                and control["model"] and control["effort"]):
+            from adapters.codex_status import prettify_model
+            label = shorten_model_label(prettify_model(control["model"]),
+                                        control["effort"], LABEL_MAX_PX)
     return {
         "source": sess["source"],
         "state": effective_state(sess),
-        "label": sess.get("label"),
+        "label": label,
         "label_color": sess.get("label_color"),
         "context_pct": sess.get("context_pct"),
         "quotas": quotas or None,
@@ -1102,6 +1130,10 @@ def handle_device_input_event(event: tuple) -> bool:
     global DEVICE_MODE
     if not event:
         return False
+    if event[0] == "encoder":
+        if EFFORT_CONTROLLER and effort_input_allowed():
+            return EFFORT_CONTROLLER.rotate(event[1])
+        return False
     if event[0] == "button":
         if event[1:3] == (0, 0) and astra_app_status()["active"]:
             request_astra_refresh()
@@ -1285,6 +1317,27 @@ def snapshot_watch_loop(transport: HttpTransport, stop: threading.Event):
         stop.wait(SNAPSHOT_POLL_S)
 
 
+def effort_feedback_elements(feedback):
+    return [{"id": "effort", "type": "text", "display": "front",
+             "x": 36, "y": 8, "align": "center", "text": feedback,
+             "font": "large", "color": "#EF5555FF" if feedback == "ERR"
+             else "#60BFFFFF", "timeout": TEXT_TIMEOUT_S}]
+
+
+def effort_overlay_elements(feedback, direction=1, entering=True):
+    error = feedback == "ERR"
+    path = (effort_animation.filename(feedback.lower(), direction, entering)
+            if feedback and not error else "effort_clear.anim")
+    return [
+        {"id": "effort_transition", "type": "animation", "display": "front",
+         "x": 0, "y": 0, "path": path, "loop": False, "timeout": 4, "z_index": 100},
+        {**_rect("effort_error_bg", 0, 0, 72, 16, "#000000FF" if error else "#00000000"),
+         "z_index": 101, "timeout": 4},
+        {**effort_feedback_elements("ERR" if error else " ")[0],
+         "id": "effort_error_text", "z_index": 102, "timeout": 4},
+    ]
+
+
 def render_loop(transport: HttpTransport, stop: threading.Event):
     last_texts = None
     last_texts_ts = 0.0
@@ -1292,6 +1345,8 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
     last_anim_ts = 0.0
     last_tick = time.time()
     ai_overlay_was_active = False
+    last_overlay_key = None
+    overlay_drawn_at = 0.0
     while not stop.is_set():
         STORE.dirty.clear()
         now = time.time()
@@ -1314,6 +1369,7 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
             continue
         if ai_overlay_was_active:
             last_anim, last_texts = None, None
+            last_overlay_key = None
             ai_overlay_was_active = False
 
         with RENDER_LOCK:
@@ -1334,6 +1390,7 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
             if force:
                 REDRAW.clear()
                 last_anim, last_texts = None, None
+                last_overlay_key = None
             if HUBLINK is not None:
                 HUBLINK.rendering = want
 
@@ -1345,11 +1402,15 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                         transport.clear(APP_NAME)
                     DRAWN.clear()
                     last_anim, last_texts = None, None
+                    last_overlay_key = None
             else:
                 if force:
                     # Leftovers first: a sleeping hub's frame, another style's ids.
                     transport.clear(APP_NAME)
                 status = status_snapshot()
+                control = EFFORT_CONTROLLER.status() if EFFORT_CONTROLLER else {}
+                feedback = (control.get("feedback")
+                            if control.get("thread_id") == sess.get("control_thread_id") else None)
                 astra = astra_availability()
                 anim = anim_element(
                     status["state"], status.get("badges"), astra["state"],
@@ -1358,17 +1419,36 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                     anims = [anim]
                     if STYLE == "avatar":
                         anims.append(avatar_element(status["state"]))
+                    # Unspecified Z-order can change when firmware updates an
+                    # element. Keep dashboard refreshes beneath the dial overlay.
+                    anims = [{**element, "z_index": 0} for element in anims]
                     if transport.draw({"application_name": APP_NAME,
                                        "priority": DRAW_PRIORITY, "elements": anims}):
                         last_anim, last_anim_ts = anim["path"], now
                         DRAWN.set()
-                texts = info_elements(status, astra)
+                texts = [{**element, "z_index": 1}
+                         for element in info_elements(status, astra)]
                 encoded = json.dumps(texts, sort_keys=True)
                 if encoded != last_texts or now - last_texts_ts > KEEPALIVE_S:
-                    if transport.draw({"application_name": APP_NAME,
+                    if not texts or transport.draw({"application_name": APP_NAME,
                                        "priority": DRAW_PRIORITY, "elements": texts}):
                         last_texts, last_texts_ts = encoded, now
                         DRAWN.set()
+                overlay_key = ((control.get("thread_id"), feedback, control.get("feedback_revision"))
+                               if feedback else None)
+                if overlay_key != last_overlay_key:
+                    elapsed = time.monotonic() - overlay_drawn_at
+                    finishing = (not feedback and last_overlay_key and last_overlay_key[1] != "ERR"
+                                 and last_overlay_key[0] == control.get("thread_id")
+                                 and elapsed < effort_animation.FRAMES / effort_animation.FPS)
+                    if not finishing:
+                        entering = not (last_overlay_key and last_overlay_key[1] != "ERR"
+                                        and last_overlay_key[0] == control.get("thread_id") and elapsed < 2.1)
+                        elements = effort_overlay_elements(feedback, control.get("direction", 1), entering)
+                        if transport.draw({"application_name": APP_NAME, "priority": DRAW_PRIORITY,
+                                           "elements": elements}):
+                            last_overlay_key = overlay_key
+                            overlay_drawn_at = time.monotonic()
         STORE.dirty.wait(timeout=0.5)
 
 # --------------------------------------------------------------------------
@@ -1418,6 +1498,9 @@ class Handler(BaseHTTPRequestHandler):
                     "connected": DEVICE_INPUT_CONNECTED,
                     "error": DEVICE_INPUT_ERROR,
                 },
+                "codex_effort": (EFFORT_CONTROLLER.status() if EFFORT_CONTROLLER
+                                 else {"enabled": False}),
+                "codex_focus": codex_focus.FOCUS.status(),
                 "device_ok": TRANSPORT.device_ok if TRANSPORT else None,
                 "device_error": TRANSPORT.last_error if TRANSPORT else "",
                 "rendering": DRAWN.is_set(),
@@ -1515,6 +1598,12 @@ class Handler(BaseHTTPRequestHandler):
             # Ages, never timestamps: the other computer's clock may be
             # seconds off, the LAN is not.
             mirrored = self.headers.get("X-Busybar-Mirror") == "1"
+            if (source == "codex" and self.client_address[0] in ("127.0.0.1", "::1")
+                    and not mirrored):
+                thread_id = data.get("control_thread_id")
+                fields["control_thread_id"] = (thread_id if isinstance(thread_id, str)
+                    and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", thread_id)
+                    else None)
             now = time.time()
             if mirrored:
                 for age_key, ts_key in (("focus_age_s", "focus_ts"),
@@ -1622,7 +1711,7 @@ def bind_loop(addr: str, stop: threading.Event, servers: list):
 
 
 def main():
-    global HUBLINK, TRANSPORT, AI_MONITOR
+    global HUBLINK, TRANSPORT, AI_MONITOR, EFFORT_CONTROLLER
     stop = STOP
     servers = []
     TRANSPORT = transport = make_transport()
@@ -1648,6 +1737,10 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
 
     if RENDER_MODE != "off":
+        if os.environ.get("BUSYBAR_CODEX_EFFORT", "1").lower() not in ("0", "false", "off"):
+            EFFORT_CONTROLLER = codex_effort.Controller(effort_target, STORE.dirty.set,
+                                                       logger=log, allowed=effort_input_allowed)
+            threading.Thread(target=EFFORT_CONTROLLER.run, args=(stop,), daemon=True).start()
         local_input_url = ""
         if os.environ.get("BUSYBAR_TRANSPORT", "usb") != "cloud":
             local_input_url = ai_status.input_stream_url(

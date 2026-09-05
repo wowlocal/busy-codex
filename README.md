@@ -164,6 +164,65 @@ Start a Claude Code session — the daemon auto-spawns on the first
 statusline refresh and the display appears. `setup_claude.py uninstall`
 reverses everything.
 
+## Codex effort dial (Desktop)
+
+The encoder changes the reasoning effort of the task open in Codex Desktop's
+primary window. Clockwise increases it, counterclockwise decreases it; the ends clamp.
+Supported levels come from that model's local Codex catalog. Quick turns are
+combined, and only a confirmed settings change triggers the blue animation.
+The new effort applies to subsequent turns; it does not interrupt a running
+answer or send a message. Bold, 12-pixel lettering slides into place over moving
+blue waves. The overlay fades in over the live quota screen and dissolves back
+after 2.6 seconds; successive dial turns keep the background visible.
+Higher effort subtly increases wave speed and glint intensity and adds a violet
+tint. The gradient stays continuous behind and around the lettering.
+
+The controller retains each model's last confirmed catalog entry for up to five
+minutes if the shared cache becomes unreadable or temporarily loses that model.
+A fresh valid entry takes precedence immediately. Catalog errors preserve the
+Desktop connection and log the exact model and available entries for diagnosis.
+
+![Native effort animation](docs/img/effort-ultra.png)
+
+Generate and upload the native 25 fps wave, glint and sliding-label animations:
+
+```bash
+python3 install_effort_anims.py
+```
+
+Control is enabled by default. Run the daemon and Codex adapter on the same Mac
+as Codex Desktop. Selection follows the app's `thread_stream_view_activity_changed`
+lifecycle events in `~/Library/Logs/com.openai.codex`, which record task-view
+mounts and unmounts. Background model output and auto-review sessions cannot
+select a task. The adapter follows the same selection and refreshes on tab
+changes even when the selected task is idle.
+
+For an optional fixed task, set this in `env.sh` before starting both processes
+(manual launches should first source the file):
+
+```bash
+export BUSYBAR_CODEX_THREAD_ID="<existing local Desktop task UUID>"
+```
+
+`BUSYBAR_CODEX_THREAD_ID` pins the display/adapter and dial to that task. Without
+it, selection is automatic. Home/Settings pages, a closed Codex app, or missing
+view events disable writes. Keep tasks in one primary Codex window: if multiple
+primary windows have visible tasks, control pauses because focus can change
+without a log event. No UI automation, Accessibility permission, app patching,
+or new Codex conversation is needed.
+
+The integration uses the installed Desktop's private, versioned IPC protocol
+(snapshot v11, settings request v1), verified against the September 2026 app.
+It preserves the model, collaboration mode and other settings. It fails closed
+when the app disconnects, ownership or protocol changes, or the model catalog
+does not contain the current effort and no recent confirmed entry is available.
+Menus, Astra Watch and provider outage
+overlays retain their controls. CLI-only and remote tasks are not controlled.
+`GET /hub` includes `codex_focus` selection evidence and `codex_effort` connection,
+target, model, effort and errors. `BUSYBAR_CODEX_LOG_DIR` overrides the Desktop
+log directory. `BUSYBAR_CODEX_IPC` overrides the socket path; `BUSYBAR_CODEX_EFFORT=0` disables
+the controller without disabling the quota display.
+
 ## Display styles
 
 Two looks, one codebase — pick with `BUSYBAR_STYLE` (persist it in an

@@ -31,6 +31,7 @@ import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import report  # noqa: E402  (daemon/hub address + host headers from env.sh)
+import codex_focus
 
 DAEMON = report.BASE + "/v1/report"
 CODEX_HOME = pathlib.Path.home() / ".codex"
@@ -38,7 +39,7 @@ SESSIONS = CODEX_HOME / "sessions"
 
 QUIET_RECHECK_S = 8  # one final read after the rollout stops changing
 COMPLETE_S = 120     # fallback for old rollouts without lifecycle events
-POLL_S = 2.0
+POLL_S = 0.25
 
 VENDOR_PREFIXES = ("gpt-", "chatgpt-", "openai-")
 
@@ -91,9 +92,29 @@ def config_defaults() -> dict:
     return out
 
 
+_FOCUSED_ROLLOUTS = {}
+
+
 def newest_rollout() -> pathlib.Path | None:
-    files = list(SESSIONS.glob("*/*/*/rollout-*.jsonl"))
-    return max(files, key=lambda f: f.stat().st_mtime, default=None)
+    target = report.ENV.get("BUSYBAR_CODEX_THREAD_ID", "") or codex_focus.FOCUS.current()
+    if target:
+        path = _FOCUSED_ROLLOUTS.get(target)
+        if path and path.exists():
+            return path
+        path = next(SESSIONS.glob(f"*/*/*/rollout-*-{target}.jsonl"), None)
+        if path:
+            _FOCUSED_ROLLOUTS[target] = path
+        return path
+    return None
+
+
+def rollout_metadata(path) -> dict:
+    try:
+        with path.open() as stream:
+            event = json.loads(stream.readline())
+        return event.get("payload", {}) if event.get("type") == "session_meta" else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def _apply_event(snapshot: dict, event: dict) -> None:
@@ -214,8 +235,11 @@ def probe() -> dict | None:
     if effort:
         label += f" {effort}"
 
+    meta = rollout_metadata(rollout) if rollout else {}
     return {
         "source": "codex", "session_id": session_id, "state": state,
+        "control_thread_id": (meta.get("id") if meta.get("originator") == "Codex Desktop"
+                              and meta.get("source") == "vscode" else None),
         "label": label, "context_pct": context_pct, "quotas": quotas,
         "badges": badges, "ttl_s": 600,
     }
@@ -255,13 +279,21 @@ def main():
     # taken from lifecycle events, so a long silent reasoning/tool interval
     # remains WORKING until Codex actually writes task_complete.
     last_stamp = None
+    previous = None
+    last_report_at = 0
     quiet_rechecked = False
     while True:
         rollout = newest_rollout()
         stat = rollout.stat() if rollout else None
-        stamp = (stat.st_mtime_ns, stat.st_size) if stat else None
-        if stamp != last_stamp:
+        stamp = (rollout, stat.st_mtime_ns, stat.st_size) if stat else None
+        if rollout != previous:
+            if previous:
+                post({"source": "codex", "session_id": previous.stem.split("rollout-")[-1][:64],
+                      "ended": True})
+            previous = rollout
+        if stamp != last_stamp or time.time() - last_report_at >= 20:
             last_stamp = stamp
+            last_report_at = time.time()
             quiet_rechecked = False
             _emit(verbose)
         elif (not quiet_rechecked and stat is not None
