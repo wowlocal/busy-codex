@@ -1492,6 +1492,27 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                 control = EFFORT_CONTROLLER.status() if EFFORT_CONTROLLER else {}
                 feedback = (control.get("feedback")
                             if control.get("thread_id") == sess.get("control_thread_id") else None)
+                # Detent feedback goes out before quota text/ring refreshes.
+                # Those can each occupy a USB round trip, even while hidden.
+                overlay_key = ((control.get("thread_id"), feedback, control.get("feedback_revision"))
+                               if feedback else None)
+                if overlay_key != last_overlay_key:
+                    elapsed = time.monotonic() - overlay_drawn_at
+                    finishing = (not feedback and last_overlay_key and last_overlay_key[1] != "ERR"
+                                 and last_overlay_key[0] == control.get("thread_id")
+                                 and elapsed < effort_animation.DURATION_S)
+                    if not finishing:
+                        entering = not (last_overlay_key and last_overlay_key[1] != "ERR"
+                                        and last_overlay_key[0] == control.get("thread_id")
+                                        and elapsed < (effort_animation.FRAMES - effort_animation.FADE_FRAMES)
+                                        / effort_animation.FPS)
+                        elements = effort_overlay_elements(feedback, control.get("direction", 1), entering)
+                        if transport.draw({"application_name": APP_NAME, "priority": DRAW_PRIORITY,
+                                           "elements": elements}):
+                            last_overlay_key = overlay_key
+                            overlay_drawn_at = time.monotonic()
+                            if feedback and feedback != "ERR":
+                                EFFORT_CONTROLLER.mark_drawn(control.get("feedback_revision"))
                 astra = astra_availability()
                 anim = anim_element(
                     status["state"], status.get("badges"), astra["state"],
@@ -1515,21 +1536,6 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                                        "priority": DRAW_PRIORITY, "elements": texts}):
                         last_texts, last_texts_ts = encoded, now
                         DRAWN.set()
-                overlay_key = ((control.get("thread_id"), feedback, control.get("feedback_revision"))
-                               if feedback else None)
-                if overlay_key != last_overlay_key:
-                    elapsed = time.monotonic() - overlay_drawn_at
-                    finishing = (not feedback and last_overlay_key and last_overlay_key[1] != "ERR"
-                                 and last_overlay_key[0] == control.get("thread_id")
-                                 and elapsed < effort_animation.FRAMES / effort_animation.FPS)
-                    if not finishing:
-                        entering = not (last_overlay_key and last_overlay_key[1] != "ERR"
-                                        and last_overlay_key[0] == control.get("thread_id") and elapsed < 2.1)
-                        elements = effort_overlay_elements(feedback, control.get("direction", 1), entering)
-                        if transport.draw({"application_name": APP_NAME, "priority": DRAW_PRIORITY,
-                                           "elements": elements}):
-                            last_overlay_key = overlay_key
-                            overlay_drawn_at = time.monotonic()
         STORE.dirty.wait(timeout=0.5)
 
 # --------------------------------------------------------------------------

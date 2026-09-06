@@ -204,5 +204,38 @@ class AstraIndicatorTest(unittest.TestCase):
             daemon.ASTRA_APP_REQUESTS = previous_requests
 
 
+class EffortRenderOrderTest(unittest.TestCase):
+    def test_confirmed_detent_is_sent_before_dashboard_refreshes(self):
+        import threading
+        store = daemon.Store()
+        store.report('codex', 'test', {'state': 'WORKING', 'control_thread_id': 'test'})
+        stop = threading.Event()
+        control = mock.Mock()
+        control.status.return_value = {'thread_id': 'test', 'feedback': 'HIGH',
+                                       'feedback_revision': 1, 'direction': 1}
+        batches = []
+
+        def draw(payload):
+            batches.append(payload['elements'])
+            stop.set()
+            store.dirty.set()
+            return True
+
+        transport = mock.Mock()
+        transport.draw.side_effect = draw
+        with mock.patch.object(daemon, 'STORE', store), \
+             mock.patch.object(daemon, 'EFFORT_CONTROLLER', control), \
+             mock.patch.object(daemon, 'AI_MONITOR', None), \
+             mock.patch.object(daemon, 'HUBLINK', None), \
+             mock.patch.object(daemon, 'REDRAW', threading.Event()), \
+             mock.patch.object(daemon, 'DRAWN', threading.Event()), \
+             mock.patch.object(daemon, 'RENDER_MODE', 'auto'), \
+             mock.patch.object(daemon, 'device_canvas_allowed', return_value=True), \
+             mock.patch.object(daemon, 'status_snapshot', return_value={'state': 'WORKING'}):
+            daemon.render_loop(transport, stop)
+        self.assertEqual('effort_transition', batches[0][0]['id'])
+        control.mark_drawn.assert_called_once_with(1)
+
+
 if __name__ == "__main__":
     unittest.main()

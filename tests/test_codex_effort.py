@@ -2,6 +2,7 @@ import copy
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -108,6 +109,53 @@ class EffortTest(unittest.TestCase):
             daemon.handle_device_input_event(('encoder', -2))
             control.rotate.assert_called_once_with(-2)
 
+    def test_more_detents_do_not_push_back_the_first_write(self):
+        control = effort.Controller(lambda: 'a', lambda: None)
+        control.thread_id, control.connected = 'a', True
+        with mock.patch.object(effort.time, 'monotonic', return_value=10):
+            control.rotate(1)
+        with mock.patch.object(effort.time, 'monotonic', return_value=10.08):
+            control.rotate(1)
+        self.assertEqual(10, control.due)
+        self.assertTrue(control.wake.is_set())
+        self.assertIsNone(control.status()['feedback'])
+
+    def test_desktop_stream_does_not_starve_dial_settings(self):
+        changed = threading.Event()
+        control = effort.Controller(lambda: 'a', changed.set)
+        ipc = mock.Mock()
+        state = self.state()
+
+        def snapshot(*_):
+            control.on_change({'type': 'snapshot', 'revision': 1, 'conversationState': state})
+
+        def request(method, params, target):
+            state['latestThreadSettings'].update(params['threadSettings'])
+            snapshot()
+
+        ipc.connect.side_effect = snapshot
+        ipc.receive.side_effect = snapshot
+        ipc.request.side_effect = request
+        ipc.levels_for.return_value = ['low', 'high', 'xhigh']
+        stop = threading.Event()
+        with mock.patch.object(effort, 'DesktopIPC', return_value=ipc), \
+             mock.patch.object(effort.select, 'select', return_value=([ipc.sock], [], [])):
+            worker = threading.Thread(target=control.run, args=(stop,))
+            worker.start()
+            try:
+                self.assertTrue(changed.wait(1))
+                self.assertTrue(control.rotate(1))
+                # A continuously readable stream used to skip pending input.
+                for _ in range(100):
+                    if control.status()['feedback'] == 'XHIGH':
+                        break
+                    stop.wait(.01)
+                self.assertEqual('XHIGH', control.status()['feedback'])
+                ipc.request.assert_called_once()
+            finally:
+                stop.set()
+                worker.join(1)
+
     def test_rejected_encoder_event_records_the_blocking_reason(self):
         with mock.patch.object(daemon, 'EFFORT_CONTROLLER', mock.Mock()), \
              mock.patch.object(daemon, 'effort_input_allowed', return_value=False), \
@@ -131,7 +179,7 @@ class AnimationTest(unittest.TestCase):
             self.assertTrue(pixels)
         up = animation.frames('ultra', 1, n=12)
         down = animation.frames('ultra', -1, n=12)
-        self.assertNotEqual(up[3], down[3])
+        self.assertNotEqual(up[1], down[1])
         self.assertEqual(up[9], down[9])
         self.assertEqual(72 * 16 * 4, len(up[0]))
         animgen.decode_check(animgen.encode_anim(up), up)
@@ -144,11 +192,29 @@ class AnimationTest(unittest.TestCase):
         self.assertTrue(all(alpha == 255 for alpha in frames[20][3::4]))
         self.assertTrue(all(0 < alpha < 255 for alpha in frames[-5][3::4]))
         pixels, width = animation.word_pixels('ULTRA')
-        self.assertEqual(48, width)
         self.assertEqual(12, max(y for _, y in pixels) + 1)
-        self.assertGreater(len(pixels), 250)
+        # The full word is legible after two frames and stays uniformly white.
+        for x, y in pixels:
+            index = ((y + 2) * 72 + x + (72 - width) // 2) * 4
+            self.assertEqual(bytes((255, 250, 245, 255)), frames[2][index:index + 4])
         switching = animation.frames('ultra', n=1, entering=False)
         self.assertTrue(all(alpha == 255 for alpha in switching[0][3::4]))
+
+    def test_higher_efforts_have_distinct_increasing_motion(self):
+        import effort_animation as animation
+        energies = []
+        for rank in range(4, 8):
+            motion = 0
+            for f in range(8, 28):
+                for x in range(0, 72, 2):
+                    for y in (0, 1, 14, 15):
+                        before = animation.background(rank, x, y, (f - 1) / animation.FPS)
+                        after = animation.background(rank, x, y, f / animation.FPS)
+                        motion += sum(abs(a - b) for a, b in zip(before, after))
+            energies.append(motion)
+        # Each tier must be visibly more active, not merely a recoloured loop.
+        for lower, higher in zip(energies, energies[1:]):
+            self.assertGreater(higher, lower * 1.25)
 
     def test_native_overlay_is_above_dashboard_and_ids_keep_types(self):
         normal = daemon.effort_overlay_elements('ULTRA')

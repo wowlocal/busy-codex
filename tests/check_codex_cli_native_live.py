@@ -23,6 +23,32 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from codex_cli_native import NativeCLIIPC
 from codex_cli_title import TitleOutput
+from codex_effort import Controller
+
+
+def check_dial(record, home):
+    info = {'kind': 'cli', 'native_control': True, 'thread_id': record['threadId'],
+            'socket': record['socket']}
+    controller = Controller(lambda: record['threadId'], lambda: None, home=home,
+                            target_info=lambda: info)
+    stop = threading.Event()
+    worker = threading.Thread(target=controller.run, args=(stop,), daemon=True)
+    worker.start()
+    try:
+        wait_for(lambda: controller.status()['connected'], 'Dial controller did not connect')
+        timings = []
+        for delta in (1, 1, 1, 1, 1, -1, -1, -1):
+            revision = controller.status()['feedback_revision']
+            assert controller.rotate(delta)
+            wait_for(lambda: controller.status()['feedback_revision'] > revision,
+                     'Dial controller did not confirm a step')
+            status = controller.status()
+            assert not status['error'], status['error']
+            timings.append(status['confirmation_ms'])
+        print('PASS: native dial confirmation latency (ms):', timings, flush=True)
+    finally:
+        stop.set()
+        worker.join(2)
 
 
 def wait_for(predicate, message, timeout=20):
@@ -126,6 +152,10 @@ def check(binary):
             assert client.raw_rpc(request)['status'] == 'applied'
             client.receive()
             print('PASS: reconnect and duplicate request preserve confirmed result', flush=True)
+
+            client.close()
+            check_dial(record, home)
+            client.connect(record['threadId'])
 
             old_thread, old_revision = client.thread_id, client.state['revision']
             os.write(master, b'/new')

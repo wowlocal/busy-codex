@@ -200,21 +200,29 @@ The encoder follows the foreground app: the task open in Codex Desktop's
 primary window, or the focused terminal running a connected Codex CLI.
 Clockwise increases effort, counterclockwise decreases it; the ends clamp.
 Supported levels come from that model's Codex catalog (the CLI's live
-`model/list` response, or Desktop's local cache). Quick turns are
-combined, and only a confirmed settings change triggers the blue animation.
+`model/list` response, or Desktop's local cache). The first detent wakes the
+controller immediately. Quick turns are combined during a settings request,
+with at most one confirmed update per 40 ms; continued rotation never postpones
+the first update. Only confirmed settings changes trigger the animation.
 The new effort applies to subsequent turns; it does not interrupt a running
-answer or send a message. Bold, 12-pixel lettering slides into place over moving
-blue waves. The overlay fades in over the live quota screen and dissolves back
-after 2.6 seconds; successive dial turns keep the background visible.
-Higher effort subtly increases wave speed and glint intensity and adds a violet
-tint. The gradient stays continuous behind and around the lettering.
+answer or send a message. Hand-drawn, 12-pixel lettering uses clean two-pixel
+stems, open counters, and steady white ink. It becomes fully visible in 80 ms;
+successive detents replace the label immediately without replaying the entrance.
+The overlay dissolves back to the quota screen after 1.8 seconds.
+High has blue racing currents, xhigh a violet double helix, max gold shockwaves,
+and ultra fast plasma with icy sparks. Lower levels use calmer slate, teal,
+green and cyan flows. The gradient stays continuous behind and around the text.
+Effort feedback is sent to the display before lower-priority dashboard updates.
+`GET /hub` reports `codex_effort.confirmation_ms` and `display_ms`, measured from
+the first queued detent to native confirmation and successful device submission.
+These timings exclude the matrix's animation frame interval.
 
 The controller retains each model's last confirmed catalog entry for up to five
 minutes if the shared cache becomes unreadable or temporarily loses that model.
 A fresh valid entry takes precedence immediately. Catalog errors preserve the
 Desktop connection and log the exact model and available entries for diagnosis.
 
-![Native effort animation](docs/img/effort-ultra.png)
+![Effort levels: high, xhigh, max and ultra](docs/img/effort-levels.gif)
 
 Generate and upload the native 25 fps wave, glint and sliding-label animations:
 

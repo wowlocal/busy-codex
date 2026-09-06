@@ -1,4 +1,5 @@
 import json
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import socket
@@ -27,6 +28,9 @@ class NativeClientTest(unittest.TestCase):
         self.writes = []
         self.results = {}
         self.drop_ack = False
+        self.allow_write = threading.Event()
+        self.allow_write.set()
+        self.write_received = threading.Event()
         self.state = {'protocolVersion': 1, 'instanceId': 'instance', 'threadId': THREAD,
             'model': 'test-model', 'effort': 'high', 'supportedEfforts': ['low','high','xhigh'],
             'revision': 1, 'focused': True, 'ready': True}
@@ -36,6 +40,7 @@ class NativeClientTest(unittest.TestCase):
         self.client.connect(THREAD)
 
     def tearDown(self):
+        self.allow_write.set()
         self.client.close()
         self.stop.set()
         self.worker.join(2)
@@ -55,6 +60,8 @@ class NativeClientTest(unittest.TestCase):
                         result = self.state
                     elif value['method'] == 'effort/set':
                         self.writes.append(value)
+                        self.write_received.set()
+                        self.allow_write.wait(2)
                         if value['expectedRevision'] != self.state['revision']:
                             result = {'requestId': value['requestId'], 'status': 'rejected',
                                       'outcome': {'error': 'selection or settings changed'}}
@@ -84,7 +91,8 @@ class NativeClientTest(unittest.TestCase):
                                 {'threadSettings': {'effort': 'xhigh'}})
         self.assertEqual('low', self.state['effort'])
 
-    def test_dial_controller_routes_to_native_tui(self):
+    @contextmanager
+    def controller(self):
         self.client.close()
         info = {'kind':'cli', 'native_control':True, 'thread_id':THREAD, 'socket':str(self.path)}
         controller = Controller(lambda: THREAD, lambda: None, target_info=lambda: info)
@@ -95,15 +103,45 @@ class NativeClientTest(unittest.TestCase):
             deadline = time.monotonic() + 3
             while not controller.status()['connected'] and time.monotonic() < deadline:
                 time.sleep(.01)
+            self.assertTrue(controller.status()['connected'])
+            yield controller
+        finally:
+            self.allow_write.set()
+            stop.set()
+            worker.join(2)
+
+    def test_dial_controller_routes_to_native_tui(self):
+        with self.controller() as controller:
+            deadline = time.monotonic() + 3
             self.assertTrue(controller.rotate(1))
             while controller.status()['feedback'] != 'XHIGH' and time.monotonic() < deadline:
                 time.sleep(.01)
             self.assertEqual('XHIGH', controller.status()['feedback'])
             self.assertEqual('xhigh', self.state['effort'])
             self.assertEqual(1, len(self.writes))
-        finally:
-            stop.set()
-            worker.join(2)
+
+    def test_continuous_rotation_applies_before_the_user_stops(self):
+        with self.controller() as controller:
+            for _ in range(15):
+                controller.rotate(1)
+                if self.write_received.wait(.02):
+                    break
+            self.assertTrue(self.write_received.is_set(), 'Dial waited for rotation to stop')
+
+    def test_steps_during_confirmation_preserve_order_without_false_feedback(self):
+        self.allow_write.clear()
+        with self.controller() as controller:
+            controller.rotate(1)
+            self.assertTrue(self.write_received.wait(1))
+            self.assertIsNone(controller.status()['feedback'])
+            controller.rotate(-1)
+            controller.rotate(-1)
+            self.allow_write.set()
+            deadline = time.monotonic() + 2
+            while controller.status()['feedback'] != 'LOW' and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertEqual('LOW', controller.status()['feedback'])
+            self.assertEqual(['xhigh', 'low'], [write['effort'] for write in self.writes])
 
     def test_discovery_uses_native_full_task_identity(self):
         home = Path(self.temp.name)

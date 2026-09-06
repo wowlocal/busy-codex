@@ -17,11 +17,14 @@ import threading
 import time
 import uuid
 
+from effort_animation import DURATION_S
+
 LEVELS = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra')
 STATE_KEYS = {'latestThreadSettings', 'latestModel', 'latestReasoningEffort',
               'latestCollaborationMode'}
 MAX_FRAME = 256 * 1024 * 1024
 CATALOG_GRACE_S = 300
+STEP_INTERVAL_S = .04
 
 
 class CatalogError(ValueError):
@@ -218,11 +221,17 @@ class Controller:
         self.socket_path = os.environ.get('BUSYBAR_CODEX_IPC', str(self.home / 'ipc/ipc.sock'))
         self.logger = logger
         self.lock = threading.Lock()
+        self.wake = threading.Event()
         self.thread_id = None
         self.state = {}
         self.revision = None
         self.pending = 0
         self.due = 0
+        self.last_applied_at = 0
+        self.pending_since = 0
+        self.feedback_input_at = 0
+        self.confirmation_ms = None
+        self.display_ms = None
         self.error = ''
         self.feedback = None
         self.feedback_revision = 0
@@ -242,6 +251,8 @@ class Controller:
                     'kind': self.kind,
                     'model': model, 'effort': effort, 'error': self.error,
                     'direction': self.direction,
+                    'confirmation_ms': self.confirmation_ms,
+                    'display_ms': self.display_ms,
                     'feedback_revision': self.feedback_revision,
                     'feedback': self.feedback if time.monotonic() < self.feedback_until else None}
 
@@ -254,9 +265,18 @@ class Controller:
                 return False
             if self.target_key is not None and key != self.target_key:
                 return False
+            if not self.pending:
+                self.pending_since = time.monotonic()
+                # Leading-edge throttle: later detents never postpone a write.
+                self.due = max(self.pending_since, self.last_applied_at + STEP_INTERVAL_S)
             self.pending = max(-32, min(32, self.pending + int(delta)))
-            self.due = time.monotonic() + 0.12
+        self.wake.set()
         return True
+
+    def mark_drawn(self, revision):
+        with self.lock:
+            if revision == self.feedback_revision and self.feedback_input_at:
+                self.display_ms = round((time.monotonic() - self.feedback_input_at) * 1000, 1)
 
     def on_change(self, change):
         with self.lock:
@@ -269,6 +289,7 @@ class Controller:
         retry_at = 0
         try:
             while not stop.is_set():
+                self.wake.clear()
                 target, info, target_key = self.selection()
                 if target_key != self.target_key:
                     if ipc:
@@ -279,6 +300,8 @@ class Controller:
                         self.target_key, self.kind = target_key, info.get('kind', 'desktop')
                         self.state, self.revision, self.pending = {}, None, 0
                         self.connected, self.feedback, self.error = False, None, ''
+                        self.confirmation_ms = self.display_ms = None
+                        self.last_applied_at = self.feedback_input_at = 0
                     retry_at = 0
                     self.changed()
                 if not target or time.monotonic() < retry_at:
@@ -309,15 +332,20 @@ class Controller:
                             self.error = ''
                     if hasattr(ipc, 'poll'):
                         ipc.poll()
-                    if select.select([ipc.sock], [], [], 0.05)[0]:
+                    readable = select.select([ipc.sock], [], [], 0)[0]
+                    if readable:
                         ipc.receive()
-                        continue
                     with self.lock:
                         delta = self.pending if time.monotonic() >= self.due else 0
+                        input_at = self.pending_since
                         if delta:
                             self.pending = 0
                         state = copy.deepcopy(self.state)
                     if not delta or self.selection()[2] != target_key or not self.allowed():
+                        with self.lock:
+                            wait = min(.05, max(0, self.due - time.monotonic())) if self.pending else .05
+                        if not readable:
+                            self.wake.wait(wait)
                         continue
                     model, current = model_effort(state)
                     levels = (ipc.levels_for(model) if hasattr(ipc, 'levels_for')
@@ -340,7 +368,13 @@ class Controller:
                         self.feedback = effort.upper()
                         self.feedback_revision += 1
                         self.direction = 1 if delta > 0 else -1
-                        self.feedback_until = time.monotonic() + 2.6
+                        self.last_applied_at = time.monotonic()
+                        self.feedback_until = self.last_applied_at + DURATION_S
+                        self.feedback_input_at = input_at
+                        self.confirmation_ms = round((self.last_applied_at - input_at) * 1000, 1)
+                        self.display_ms = None
+                        if self.pending:
+                            self.due = self.last_applied_at + STEP_INTERVAL_S
                         self.error = ''
                     self.logger(f'Codex effort: {target} -> {effort}')
                     self.changed()
@@ -348,6 +382,7 @@ class Controller:
                     # Keep the valid subscription and any newly queued dial steps.
                     # A missing/partially rewritten shared cache is not an IPC error.
                     with self.lock:
+                        self.confirmation_ms = self.display_ms = None
                         self.error = str(error)
                         self.feedback = 'ERR'
                         self.feedback_revision += 1
@@ -359,6 +394,7 @@ class Controller:
                         ipc.close()
                         ipc = None
                     with self.lock:
+                        self.confirmation_ms = self.display_ms = None
                         self.error = str(error)
                         self.connected = False
                         self.pending = 0
