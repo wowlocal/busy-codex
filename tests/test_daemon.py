@@ -205,6 +205,28 @@ class AstraIndicatorTest(unittest.TestCase):
 
 
 class EffortRenderOrderTest(unittest.TestCase):
+    def test_screen_takeover_blocks_dial_until_a_draw_is_accepted_again(self):
+        import threading
+        from busybar_http import HttpTransport
+        store = daemon.Store()
+        store.report('codex', 'test', {'state': 'WORKING', 'control_thread_id': 'test'})
+        drawn = threading.Event()
+        drawn.set()
+        transport = HttpTransport('http://device/api')
+        with mock.patch.object(daemon, 'STORE', store), \
+             mock.patch.object(daemon, 'TRANSPORT', transport), \
+             mock.patch.object(daemon, 'DRAWN', drawn), \
+             mock.patch.object(daemon, 'AI_MONITOR', None), \
+             mock.patch.object(daemon, 'HUBLINK', None), \
+             mock.patch.object(daemon, 'DEVICE_MODE', 'CUSTOM'), \
+             mock.patch.object(daemon, 'effort_target', return_value='test'), \
+             mock.patch.object(daemon, 'device_canvas_allowed', return_value=True):
+            transport.last_http_status = 409
+            self.assertFalse(daemon.effort_input_allowed())
+            self.assertIn('Another application', daemon.effort_input_block_reason())
+            transport.last_http_status = 200
+            self.assertTrue(daemon.effort_input_allowed())
+
     def test_confirmed_detent_is_sent_before_dashboard_refreshes(self):
         import threading
         store = daemon.Store()

@@ -459,6 +459,8 @@ def effort_input_block_reason():
         return 'Device mode owns the dial'
     if not DRAWN.is_set() or (AI_MONITOR and AI_MONITOR.drawn):
         return 'Codex status is not being displayed'
+    if TRANSPORT is not None and TRANSPORT.last_http_status == 409:
+        return 'Another application owns the display'
     if HUBLINK is not None and not HUBLINK.takeover:
         return 'Another hub owns the display'
     return ''
