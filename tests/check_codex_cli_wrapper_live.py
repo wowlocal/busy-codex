@@ -41,6 +41,7 @@ def child(options):
 
     cli.Bridge = EphemeralBridge
     os.environ['BUSYBAR_CODEX_CLI_BIN'] = options.binary
+    os.environ['BUSYBAR_CODEX_LEGACY_BRIDGE'] = '1'
     # The physical dial must not follow this background test terminal.
     os.environ['TERM_PROGRAM'] = 'busy-test'
     sys.argv = ['codex', '--yolo']

@@ -229,60 +229,59 @@ mounts and unmounts. Background model output and auto-review sessions cannot
 select a task. The adapter follows the same selection and refreshes on tab
 changes even when the selected task is idle.
 
-For CLI control, connect the ordinary `codex` command once from this repository:
+CLI control uses the fork's **native TUI control endpoint**. The TUI itself
+publishes its selected task, focus, model, effective effort and supported levels.
+BUSY Bar sends an explicit effort request and follows its native confirmation by
+request ID. Normal startup and resume use Codex's own backend directly.
+
+Use the [native control fork](https://github.com/wowlocal/codex/tree/codex/native-tui-control)
+with `CODEX_TUI_CONTROL` support. Our fork launcher enables it;
+the raw binary can opt in explicitly:
 
 ```bash
-python3 install_codex_cli.py install
-codex --yolo
-# Or continue an existing CLI task:
-codex resume <session-id> --yolo
+CODEX_TUI_CONTROL=1 codex --yolo
+CODEX_TUI_CONTROL=1 codex resume <session-id> --yolo
 ```
 
-The installer puts a small dispatcher at `~/.local/bin/codex` and preserves
-the original executable or symlink beside it. Interactive startup, resume and
-fork connect automatically. Commands such as `exec`, `app-server`, `login`,
-`update`, help/version, explicit remote connections and calls without a TTY
-go directly to the original CLI. Arguments such as `--yolo`, model and config
-overrides are preserved. `BUSYBAR_CODEX_LAUNCH=0 codex ...` bypasses the bridge;
-`python3 install_codex_cli.py uninstall` restores the original command.
-Existing terminal windows can use the same `codex` command immediately after
-their currently running CLI exits; no shell configuration reload is needed.
+On macOS, run the display services independently through launchd:
 
-The bridge uses your existing configuration and login, and checks the BUSY Bar
-daemon/adapter every ten seconds so they can recover even while the CLI is idle.
-As an alternative to installing the dispatcher,
-`python3 codex_cli.py [args]` (or the `busy-codex-cli` symlink) launches it explicitly.
-`BUSYBAR_CODEX_CLI_BIN` can select another
-executable. A recent CLI with `--remote unix://` and `thread/settings/update`
-is required; this was verified with Codex 0.153.4. Existing standalone CLI
-processes must be exited and resumed through the launcher once, because their
-embedded server has no external settings connection.
+```bash
+python3 native_services.py install
+```
 
-The launcher connects the TUI and dial to one local app-server through private
-Unix sockets. It forwards the TUI protocol, changes only effort, preserves
-collaboration mode, and waits for `thread/settings/updated` before showing
-success. Only session/settings/focus metadata is saved under
-`$CODEX_HOME/busybar-cli`; the bridge does not save prompts or answers.
-The launcher adds the native `thread-id` item to the terminal title, alongside
-activity, project, model and effort. This is a launch-only setting; it does not
-edit `config.toml`. The title follows the task actually displayed by the TUI,
-including cached agent-view switches that make no server request. Background
-history reads and resume responses only update metadata; they never select the
-dial's target. The bridge resolves the title's shortened ID against this CLI's
-loaded tasks, and pauses if there is no unique match or the task has closed.
-If you override `tui.terminal_title` yourself, include `thread-id` to keep dial
-control available. Full title text and terminal output are never saved.
+The services start at login and register as background processes, so Python
+icons do not appear in the Dock. Launchd does not repeatedly restart an exited
+service. Existing notification hooks can still start the services on Codex use.
 
-The research behind session selection and quota sources is documented in
-[Codex integration research](docs/CODEX_INTEGRATION_RESEARCH.md).
+When migrating an installation that used the old command shim, restore the
+original command with `python3 install_codex_cli.py uninstall`, then point it
+at the updated fork launcher. Already running CLI processes retain their loaded
+binary and adopt native control on their next launch. The legacy bridge remains
+only for compatibility with older running sessions; new native launches do not
+use its Python PTY/WebSocket proxy or terminal-title parsing. Custom terminal
+titles are unrestricted. `CODEX_TUI_CONTROL=0` disables the native endpoint.
 
-On macOS, application identity comes from a fresh foreground-process lookup, with terminal tab/pane
-focus supplied by the terminal's focus reports. Ghostty, Terminal, iTerm2,
-WezTerm, Kitty, Alacritty and Warp are recognized. Multiplexers must forward
-focus reports. If several launchers report focus, the dial pauses until one is
-unambiguous. On Linux it uses the single focused launcher. Switching to another
-app on macOS disables dial writes while keeping the last task and account
-usage visible. No Accessibility or Screen Recording permission is required.
+The endpoint lives in a private `$CODEX_HOME/tui-control/<instance>` directory.
+It exposes settings/status only. Request outcomes distinguish pending, applied,
+rejected and unconfirmed; a dropped connection is recovered by reading the
+original request ID, without repeating the write. Native changes preserve Plan
+mode and unrelated settings and apply to subsequent turns. Session changes do
+not rewrite global defaults.
+
+On macOS, foreground application identity chooses Desktop versus a terminal.
+The native TUI supplies terminal focus. Ghostty, Terminal, iTerm2, WezTerm,
+Kitty, Alacritty and Warp are recognized; terminal tabs and multiplexers must
+forward focus reports. Multiple focused sessions pause the dial until selection
+is unambiguous. Switching to another app disables writes while keeping usage
+visible. No Accessibility or Screen Recording permission is required.
+
+See [native control design and upstream discussions](docs/NATIVE_CLI_CONTROL_PROPOSAL.md)
+and [integration research](docs/CODEX_INTEGRATION_RESEARCH.md). To run the isolated
+native TUI check without submitting model prompts:
+
+```bash
+python3 tests/check_codex_cli_native_live.py /path/to/native/codex-or-launcher
+```
 
 For an optional fixed task, set this in `env.sh` before starting both processes
 (manual launches should first source the file):
@@ -304,8 +303,8 @@ It preserves the model, collaboration mode and other settings. It fails closed
 when the app disconnects, ownership or protocol changes, or the model catalog
 does not contain the current effort and no recent confirmed entry is available.
 Menus, Astra Watch and provider outage
-overlays retain their controls. Remote hosts and CLI processes started without
-the launcher are not controlled.
+overlays retain their controls. CLI instances without the native endpoint or a
+legacy bridge are not controlled.
 `GET /hub` includes `codex_target` (Desktop/CLI selection), `codex_focus`
 (Desktop view evidence) and `codex_effort` connection,
 target, model, effort and errors. `BUSYBAR_CODEX_LOG_DIR` overrides the Desktop
@@ -563,7 +562,9 @@ Things discovered the hard way, verified on-device:
 | `docs/EXTENDING.md` | reporting protocol v1, adapter guide, transport guide (incl. BLE design) |
 | `adapters/codex_status.py` | Codex adapter (model/effort/speed, context %, quotas — all derived, no name tables) |
 | `codex_usage.py` | Account-level quota polling with bounded freshness and reset-aware refreshes |
-| `codex_cli.py` | CLI launcher and local app-server bridge for live effort changes |
+| `codex_cli_native.py` | Client for the fork's native TUI status and confirmed effort API |
+| `native_services.py` | Independent macOS display daemon and adapter services |
+| `codex_cli.py` | Legacy bridge retained for compatibility; native launches bypass it |
 | `install_codex_cli.py` | Reversible automatic connection for ordinary interactive `codex` commands |
 | `codex_target.py` | Foreground Desktop/terminal selection shared by the adapter and dial |
 | `adapters/install_codex_autostart.py` | hook the adapter into Codex's `notify` so it auto-starts on use |

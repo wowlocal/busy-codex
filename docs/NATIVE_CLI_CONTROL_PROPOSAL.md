@@ -1,7 +1,19 @@
 # Native CLI control: upstream findings and proposed scope
 
-Researched 2026-09-06. This is a proposal, not an implemented or published API.
-The installed CLI and local Codex source checkout were not modified.
+Researched 2026-09-06. The findings below led to the native implementation in
+our `codex/native-tui-control` fork branch, based on installed fork commit
+`c724af0635238ad62145f8ef475267550e65acce`. This is a fork API, not an upstream
+OpenAI interface. Its versioned contract is documented in the fork's `FORK.md`.
+
+The implementation uses `status/read`, `status/subscribe`, `effort/set` and
+`request/read`. A private per-instance socket identifies the process; writes
+supply the full expected thread ID and a single revision covering selection,
+readiness, focus and settings. Native settings events confirm application.
+Results include pending, applied, rejected and unconfirmed, with the most recent
+64 request outcomes retained until process exit. Missing confirmation expires
+after 30 seconds. BUSY Bar reads the original request result after a lost reply.
+Global defaults and terminal-title settings are untouched. The original design
+and research are retained below for context.
 
 ## Related upstream work
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Launch Codex CLI with a local BUSY Bar connection: python3 codex_cli.py [args].
+"""Launch the fork with native TUI controls: python3 codex_cli.py [args].
 
-The TUI and dial share one app-server. Only settings/focus metadata is retained;
-conversation messages pass through unchanged and are never written by this bridge.
+Normal launches exec the native CLI directly. The old bridge is retained only
+behind BUSYBAR_CODEX_LEGACY_BRIDGE=1 for older binaries and regression fixtures.
 """
 from __future__ import annotations
 
@@ -545,7 +545,7 @@ def keep_services_alive(stop, interval=10):
         stop.wait(interval)
 
 
-def main():
+def legacy_main():
     binary = os.environ.get('BUSYBAR_CODEX_CLI_BIN') or shutil.which('codex')
     if not binary:
         raise SystemExit('Codex CLI not found; set BUSYBAR_CODEX_CLI_BIN.')
@@ -582,6 +582,17 @@ def main():
         if bridge:
             bridge.close()
         shutil.rmtree(directory)
+
+
+def main():
+    if os.environ.get('BUSYBAR_CODEX_LEGACY_BRIDGE') == '1':
+        return legacy_main()
+    binary = os.environ.get('BUSYBAR_CODEX_CLI_BIN') or shutil.which('codex')
+    if not binary:
+        raise SystemExit('Codex fork not found; set BUSYBAR_CODEX_CLI_BIN.')
+    env = dict(os.environ)
+    env.setdefault('CODEX_TUI_CONTROL', '1')
+    os.execvpe(binary, [binary, *sys.argv[1:]], env)
 
 
 if __name__ == '__main__':

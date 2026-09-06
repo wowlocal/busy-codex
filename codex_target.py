@@ -5,6 +5,7 @@ import ctypes
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import sys
 import threading
@@ -17,6 +18,8 @@ TERMINALS = {'com.mitchellh.ghostty': 'ghostty', 'com.apple.Terminal': 'Apple_Te
              'org.wezfurlong.wezterm': 'WezTerm', 'net.kovidgoyal.kitty': 'kitty',
              'org.alacritty': 'Alacritty'}
 DESKTOP = {'com.openai.codex', 'com.openai.chat', 'com.openai.ChatGPT'}
+_FOREGROUND_API = None
+_FOREGROUND_API_LOCK = threading.Lock()
 
 
 class ProcessSerialNumber(ctypes.Structure):
@@ -27,9 +30,23 @@ def frontmost_pid(processes=None):
     # NSWorkspace.frontmostApplication caches activation until AppKit's main
     # run loop runs. These headless workers have no AppKit loop: query the
     # WindowServer's front process on every poll instead.
+    global _FOREGROUND_API
     if processes is None:
-        processes = ctypes.CDLL('/System/Library/Frameworks/ApplicationServices.framework/'
-                               'Frameworks/HIServices.framework/HIServices')
+        with _FOREGROUND_API_LOCK:
+            if _FOREGROUND_API is None:
+                api = ctypes.CDLL('/System/Library/Frameworks/ApplicationServices.framework/'
+                                  'Frameworks/HIServices.framework/HIServices')
+                # Framework Python otherwise registers a Dock application when
+                # querying WindowServer. Transform only once: repeating returns
+                # paramErr even though the process is already background-only.
+                api.TransformProcessType.argtypes = [ctypes.POINTER(ProcessSerialNumber), ctypes.c_uint32]
+                api.TransformProcessType.restype = ctypes.c_int32
+                current = ProcessSerialNumber(0, 2)  # kCurrentProcess
+                status = api.TransformProcessType(ctypes.byref(current), 2)  # background application
+                if status != 0:
+                    raise OSError(f'macOS background registration failed (status={status})')
+                _FOREGROUND_API = api
+            processes = _FOREGROUND_API
     processes.GetFrontProcess.argtypes = [ctypes.POINTER(ProcessSerialNumber)]
     processes.GetFrontProcess.restype = ctypes.c_int16  # OSErr
     processes.GetProcessPID.argtypes = [ctypes.POINTER(ProcessSerialNumber), ctypes.POINTER(ctypes.c_int32)]
@@ -44,29 +61,24 @@ def frontmost_pid(processes=None):
 
 
 def bundle_for_pid(pid):
-    # Bundle identity is stable for a process; this does not read UI content
-    # or require Accessibility/Screen Recording.
-    ctypes.CDLL('/System/Library/Frameworks/AppKit.framework/AppKit')
-    objc = ctypes.CDLL('/usr/lib/libobjc.A.dylib')
-    objc.objc_getClass.argtypes = [ctypes.c_char_p]
-    objc.objc_getClass.restype = ctypes.c_void_p
-    objc.sel_registerName.argtypes = [ctypes.c_char_p]
-    objc.sel_registerName.restype = ctypes.c_void_p
-    send = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(('objc_msgSend', objc))
-    send_pid = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
-                               ctypes.c_int32)(('objc_msgSend', objc))
-    string = ctypes.CFUNCTYPE(ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p)(('objc_msgSend', objc))
-    def msg(value, selector):
-        return send(value, objc.sel_registerName(selector.encode()))
-    pool = msg(msg(objc.objc_getClass(b'NSAutoreleasePool'), 'alloc'), 'init')
-    try:
-        app = send_pid(objc.objc_getClass(b'NSRunningApplication'),
-                       objc.sel_registerName(b'runningApplicationWithProcessIdentifier:'), pid)
-        bundle = msg(app, 'bundleIdentifier')
-        value = string(bundle, objc.sel_registerName(b'UTF8String')) if bundle else None
-        return value.decode() if value else None
-    finally:
-        msg(pool, 'drain')
+    # Read executable metadata without loading AppKit. Framework Python turns
+    # these headless workers into Dock applications when AppKit initializes.
+    proc = ctypes.CDLL('/usr/lib/libproc.dylib')
+    proc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    proc.proc_pidpath.restype = ctypes.c_int
+    buffer = ctypes.create_string_buffer(4096)  # PROC_PIDPATHINFO_MAXSIZE
+    if proc.proc_pidpath(pid, buffer, len(buffer)) <= 0:
+        return None
+    executable = Path(os.fsdecode(buffer.value))
+    for directory in executable.parents:
+        if directory.suffix != '.app':
+            continue
+        try:
+            with (directory / 'Contents/Info.plist').open('rb') as stream:
+                return plistlib.load(stream).get('CFBundleIdentifier')
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            continue
+    return None
 
 
 def frontmost_bundle():
@@ -75,11 +87,16 @@ def frontmost_bundle():
 
 def cli_sessions(home):
     records = []
-    for path in (Path(home) / 'busybar-cli').glob('*/session.json'):
+    paths = list((Path(home) / 'tui-control').glob('*/session.json'))
+    paths += list((Path(home) / 'busybar-cli').glob('*/session.json'))
+    for path in paths:
         try:
             if path.stat().st_uid != os.getuid():
                 continue
             value = json.loads(path.read_text())
+            if path.parent.parent.name == 'tui-control':
+                from codex_cli_native import normalize
+                value = normalize(value)
             if not isinstance(value, dict) or not isinstance(value.get('pid'), int):
                 continue
             os.kill(value['pid'], 0)
@@ -141,7 +158,7 @@ class Target:
                         matching = [r for r in records if r.get('focused') and
                                     (bundle is None or r.get('terminal') == TERMINALS[bundle])]
                         self.error = ((matching[0].get('error') if len(matching) == 1 else None)
-                                      or 'No uniquely focused BUSY Bar CLI; launch it with busy-codex-cli')
+                                      or 'No uniquely focused CLI with native TUI control')
                 else:
                     self.error = 'Codex Desktop or a CLI terminal is not in the foreground'
             except (OSError, ValueError, TypeError) as error:

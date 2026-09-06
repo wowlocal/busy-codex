@@ -291,8 +291,12 @@ class Controller:
                         with self.lock:
                             self.state, self.revision, self.connected = {}, None, False
                         if info.get('kind') == 'cli':
-                            from codex_cli_client import CLIIPC
-                            ipc = CLIIPC(info['socket'], self.on_change)
+                            if info.get('native_control'):
+                                from codex_cli_native import NativeCLIIPC
+                                ipc = NativeCLIIPC(info['socket'], self.on_change)
+                            else:
+                                from codex_cli_client import CLIIPC
+                                ipc = CLIIPC(info['socket'], self.on_change)
                         else:
                             ipc = DesktopIPC(self.socket_path, self.on_change)
                         ipc.connect(target)
