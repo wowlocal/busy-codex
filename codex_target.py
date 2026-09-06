@@ -96,8 +96,8 @@ def cli_sessions(home):
 
 def choose_cli(records, terminal=None):
     candidates = [record for record in records if record.get('focused')
-                  and record.get('ready') and (terminal is None or record.get('terminal') == terminal)]
-    return candidates[0] if len(candidates) == 1 else None
+                  and (terminal is None or record.get('terminal') == terminal)]
+    return candidates[0] if len(candidates) == 1 and candidates[0].get('ready') else None
 
 
 class Target:

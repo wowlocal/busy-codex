@@ -1813,6 +1813,7 @@ def main():
         threading.Thread(target=HUBLINK.loop, args=(stop,), daemon=True).start()
 
     def shutdown(*_):
+        log('shutdown requested' + (f' by signal {_[0]}' if _ else ''))
         stop.set()
         for s in servers:
             threading.Thread(target=s.shutdown, daemon=True).start()

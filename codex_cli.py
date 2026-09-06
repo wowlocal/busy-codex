@@ -25,6 +25,7 @@ import time
 import uuid
 
 from codex_effort import LEVELS, ModelCatalog
+from codex_cli_title import TITLE_CONFIG, TitleOutput, thread_prefix
 
 MAX_MESSAGE = 256 * 1024 * 1024
 
@@ -71,6 +72,9 @@ class Bridge:
         self.state = {'thread_id': None, 'model': None, 'effort': None,
                       'state': 'IDLE', 'context_pct': None, 'ready': False}
         self.settings = {}
+        self.threads = {}
+        self.visible_prefix = None
+        self.metadata['selection_source'] = 'terminal-title'
         self.models = {}
         self.catalog = ModelCatalog((env or os.environ).get('CODEX_HOME', Path.home() / '.codex'))
         self.condition = threading.Condition(threading.RLock())
@@ -154,58 +158,76 @@ class Bridge:
                 message = {**message, 'id': rid}
         self.send_backend(message)
 
-    def apply_settings(self, settings):
-        self.settings.update(copy.deepcopy(settings))
-        mode = (self.settings.get('collaborationMode') or {}).get('settings') or {}
-        self.state.update(model=self.settings.get('model'),
-                          effort=mode.get('reasoning_effort') or self.settings.get('effort'))
-        tier = self.settings.get('serviceTier')
-        self.state['badges'] = [tier] if tier and tier not in ('standard', 'default') else None
+    def observe_title(self, title):
+        with self.condition:
+            self.visible_prefix = thread_prefix(title)
+            self.refresh_selection()
+
+    def refresh_selection(self):
+        # Reads/resumes may hydrate background views. Only the native title
+        # identifies the displayed widget; no title text is kept in the registry.
+        matches = [tid for tid in self.threads
+                   if self.visible_prefix and tid.startswith(self.visible_prefix)]
+        before = self.state
+        if len(matches) == 1 and not self.stop.is_set():
+            entry = self.threads[matches[0]]
+            self.state = {**copy.deepcopy(entry['state']), 'ready': True, 'error': ''}
+            self.settings = copy.deepcopy(entry['settings'])
+        else:
+            self.state = {**self.state, 'ready': False,
+                          'error': 'CLI terminal title does not identify one live task'}
+            self.settings = {}
+        if self.state != before:
+            self.publish()
+
+    @staticmethod
+    def apply_settings(entry, settings):
+        entry['settings'].update(copy.deepcopy(settings))
+        current = entry['settings']
+        mode = (current.get('collaborationMode') or {}).get('settings') or {}
+        entry['state'].update(model=current.get('model'),
+                             effort=mode.get('reasoning_effort') or current.get('effort'))
+        tier = current.get('serviceTier')
+        entry['state']['badges'] = [tier] if tier and tier not in ('standard', 'default') else None
 
     def observe(self, message, pending=None):
         with self.condition:
             result = message.get('result') or {}
             method = (pending or {}).get('method')
-            changed = False
             if method in ('thread/start', 'thread/resume', 'thread/fork') and 'thread' in result:
                 thread = result['thread']
-                self.state.update(thread_id=thread['id'], model=result.get('model'),
-                    effort=result.get('reasoningEffort'), ready=True, error='',
+                state = dict(thread_id=thread['id'], model=result.get('model'),
+                    effort=result.get('reasoningEffort'),
                     state='WORKING' if thread.get('status', {}).get('type') == 'active' else 'IDLE',
                     context_pct=None)
-                self.settings = {'model': self.state['model'], 'effort': self.state['effort'],
-                                 'serviceTier': result.get('serviceTier')}
+                settings = {'model': state['model'], 'effort': state['effort'],
+                            'serviceTier': result.get('serviceTier')}
                 mode = pending.get('collaborationMode')
                 if mode:
-                    self.settings['collaborationMode'] = copy.deepcopy(mode)
-                changed = True
-            elif (method == 'thread/read' and (pending or {}).get('thread_id')
-                  and pending['thread_id'] != self.state['thread_id'] and self.state['thread_id']):
-                # Cached agent-view switches need not issue another RPC. Once
-                # the TUI loads another view, do not guess which one is visible.
-                self.state.update(ready=False, error='CLI has multiple task views; explicitly resume a task to restore dial control')
-                changed = True
+                    settings['collaborationMode'] = copy.deepcopy(mode)
+                self.threads[thread['id']] = {'state': state, 'settings': settings}
             elif method == 'model/list':
                 for model in result.get('data', []):
                     advertised = {level['reasoningEffort'] for level
                                   in model.get('supportedReasoningEfforts', [])}
                     self.models[model['model']] = [level for level in LEVELS if level in advertised]
             params = message.get('params') or {}
-            if params.get('threadId') == self.state['thread_id'] and self.state['thread_id']:
+            if message.get('method') == 'thread/closed':
+                self.threads.pop(params.get('threadId'), None)
+            entry = self.threads.get(params.get('threadId'))
+            if entry:
                 event = message.get('method')
                 if event == 'thread/settings/updated':
-                    self.apply_settings(params['threadSettings']); changed = True
+                    self.apply_settings(entry, params['threadSettings'])
                 elif event in ('turn/started', 'turn/completed'):
-                    self.state['state'] = 'WORKING' if event == 'turn/started' else 'COMPLETE'
-                    changed = True
+                    entry['state']['state'] = 'WORKING' if event == 'turn/started' else 'COMPLETE'
                 elif event == 'thread/tokenUsage/updated':
                     usage = params.get('tokenUsage') or {}
                     total = (usage.get('last') or {}).get('totalTokens')
                     window = usage.get('modelContextWindow')
                     if isinstance(total, (int, float)) and isinstance(window, (int, float)) and window > 0:
-                        self.state['context_pct'] = min(100., total * 100 / window); changed = True
-            if changed:
-                self.publish()
+                        entry['state']['context_pct'] = min(100., total * 100 / window)
+            self.refresh_selection()
 
     def read_backend(self):
         try:
@@ -420,6 +442,7 @@ def run_tui(argv, bridge):
         raise SystemExit(128 + signum)
     previous_signals = {sig: signal.signal(sig, terminate) for sig in (signal.SIGTERM, signal.SIGHUP)}
     focus = FocusInput(bridge.focus)
+    title = TitleOutput(bridge.observe_title)
     reaped = False
     try:
         resize()
@@ -433,6 +456,7 @@ def run_tui(argv, bridge):
                     break
                 if not data:
                     break
+                title.feed(data)
                 sys.stdout.buffer.write(data); sys.stdout.buffer.flush()
             if stdin in readable:
                 data = os.read(stdin, 65536)
@@ -486,6 +510,19 @@ def backend_args(args):
     return result
 
 
+def keep_services_alive(stop, interval=10):
+    """Recover display workers during an idle CLI, without waiting for a turn."""
+    import report
+    from adapters.codex_notify import ensure_adapter
+    while not stop.is_set():
+        try:
+            report.ensure_daemon()
+            ensure_adapter()
+        except OSError:
+            pass  # a display failure must not terminate the user's TUI
+        stop.wait(interval)
+
+
 def main():
     binary = os.environ.get('BUSYBAR_CODEX_CLI_BIN') or shutil.which('codex')
     if not binary:
@@ -511,11 +548,14 @@ def main():
                 'terminal': os.environ.get('TERM_PROGRAM', ''), 'focused': True}
     bridge = None
     try:
+        # A fresh interactive CLI is independent of the shell/tool that launched
+        # it. Explicit resume/fork arguments still go through unchanged.
+        for key in ('CODEX_THREAD_ID', 'CODEX_SESSION_ID'):
+            os.environ.pop(key, None)
         bridge = Bridge(binary, directory, metadata, server_args, dict(os.environ))
-        from adapters.codex_notify import ensure_adapter
-        import report
-        report.ensure_daemon(); ensure_adapter()
-        return run_tui([binary, '--remote', 'unix://' + str(bridge.socket_path), *args], bridge)
+        threading.Thread(target=keep_services_alive, args=(bridge.stop,), daemon=True).start()
+        return run_tui([binary, '--remote', 'unix://' + str(bridge.socket_path),
+                        '-c', TITLE_CONFIG, *args], bridge)
     finally:
         if bridge:
             bridge.close()

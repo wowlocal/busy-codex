@@ -248,8 +248,9 @@ overrides are preserved. `BUSYBAR_CODEX_LAUNCH=0 codex ...` bypasses the bridge;
 Existing terminal windows can use the same `codex` command immediately after
 their currently running CLI exits; no shell configuration reload is needed.
 
-The bridge uses your existing configuration and login, and starts the BUSY Bar
-daemon/adapter as needed. As an alternative to installing the dispatcher,
+The bridge uses your existing configuration and login, and checks the BUSY Bar
+daemon/adapter every ten seconds so they can recover even while the CLI is idle.
+As an alternative to installing the dispatcher,
 `python3 codex_cli.py [args]` (or the `busy-codex-cli` symlink) launches it explicitly.
 `BUSYBAR_CODEX_CLI_BIN` can select another
 executable. A recent CLI with `--remote unix://` and `thread/settings/update`
@@ -262,10 +263,18 @@ Unix sockets. It forwards the TUI protocol, changes only effort, preserves
 collaboration mode, and waits for `thread/settings/updated` before showing
 success. Only session/settings/focus metadata is saved under
 `$CODEX_HOME/busybar-cli`; the bridge does not save prompts or answers.
-Normal CLI startup, resume and fork select the corresponding CLI task.
-If the CLI loads several task views (for example through its agent picker),
-control pauses: cached view switches are not exposed by the server protocol.
-Explicitly resuming a task restores an unambiguous target.
+The launcher adds the native `thread-id` item to the terminal title, alongside
+activity, project, model and effort. This is a launch-only setting; it does not
+edit `config.toml`. The title follows the task actually displayed by the TUI,
+including cached agent-view switches that make no server request. Background
+history reads and resume responses only update metadata; they never select the
+dial's target. The bridge resolves the title's shortened ID against this CLI's
+loaded tasks, and pauses if there is no unique match or the task has closed.
+If you override `tui.terminal_title` yourself, include `thread-id` to keep dial
+control available. Full title text and terminal output are never saved.
+
+The research behind session selection and quota sources is documented in
+[Codex integration research](docs/CODEX_INTEGRATION_RESEARCH.md).
 
 On macOS, application identity comes from a fresh foreground-process lookup, with terminal tab/pane
 focus supplied by the terminal's focus reports. Ghostty, Terminal, iTerm2,

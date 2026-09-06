@@ -11,6 +11,7 @@ import unittest
 from unittest import mock
 
 import codex_cli as cli
+from codex_cli_title import TitleOutput, thread_prefix
 from codex_cli_client import CLIIPC
 from codex_effort import Controller
 import codex_target as target
@@ -75,6 +76,7 @@ class BridgeTest(unittest.TestCase):
         # Read the full initial settings notification before changing effort.
         notification = json.loads(cli.read_frame(self.sock)[2])
         self.assertEqual('thread/settings/updated', notification['method'])
+        self.bridge.observe_title(THREAD[:29] + '... | test-model | high')
 
     def tearDown(self):
         self.sock.close()
@@ -108,6 +110,9 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual({}, self.bridge.pending)
 
     def test_dial_changes_live_cli_and_preserves_other_settings(self):
+        self.exercise_dial()
+
+    def exercise_dial(self):
         info = {'thread_id': THREAD, 'kind': 'cli', 'socket': str(self.bridge.control_path)}
         controller = Controller(lambda: THREAD, lambda: None, home=self.temp.name,
                                 target_info=lambda: info)
@@ -147,12 +152,104 @@ class BridgeTest(unittest.TestCase):
         finally:
             client.close()
 
-    def test_multiple_cli_views_disable_control_until_explicit_resume(self):
+    def test_background_history_reads_leave_visible_task_controllable(self):
         self.rpc('thread/read', {'threadId': 'other-view'})
-        self.assertFalse(self.bridge.snapshot()['ready'])
-        self.assertIn('multiple task views', self.bridge.snapshot()['error'])
-        self.rpc('thread/start', {})
         self.assertTrue(self.bridge.snapshot()['ready'])
+        self.assertEqual(THREAD, self.bridge.snapshot()['thread_id'])
+        self.exercise_dial()
+
+    def test_cached_view_switch_uses_title_not_last_resumed_thread(self):
+        other = 'aaaaaaaa-2222-3333-4444-555555555555'
+        self.bridge.observe({'result': {'thread': {'id': other}, 'model': 'other-model',
+                                      'reasoningEffort': 'low'}}, {'method': 'thread/resume'})
+        self.assertEqual(THREAD, self.bridge.snapshot()['thread_id'])
+        self.bridge.observe_title(other[:29] + '... | other-model')
+        self.assertEqual(other, self.bridge.snapshot()['thread_id'])
+        self.assertEqual('low', self.bridge.snapshot()['effort'])
+        self.bridge.observe({'method': 'thread/settings/updated', 'params': {
+            'threadId': THREAD, 'threadSettings': {'effort': 'xhigh',
+                'collaborationMode': None}}})
+        self.assertEqual('low', self.bridge.snapshot()['effort'])
+        self.bridge.observe_title(THREAD[:29] + '... | test-model')
+        self.assertEqual('xhigh', self.bridge.snapshot()['effort'])
+        self.assertTrue(self.bridge.snapshot()['ready'])
+
+    def test_unknown_title_blocks_writes_and_recovers_without_resume(self):
+        request = {'expected_thread_id': THREAD, 'expected_model': 'test-model',
+                   'expected_effort': 'high', 'effort': 'xhigh'}
+        self.bridge.observe_title('other application')
+        with self.assertRaisesRegex(ValueError, 'not ready'):
+            self.bridge.set_effort(request)
+        self.bridge.observe_title(THREAD)
+        self.assertTrue(self.bridge.snapshot()['ready'])
+        # Never guess if two loaded IDs happen to share the truncated prefix.
+        other = THREAD[:-1] + '6'
+        self.bridge.observe({'result': {'thread': {'id': other}}}, {'method': 'thread/start'})
+        self.bridge.observe_title(THREAD[:29] + '...')
+        self.assertFalse(self.bridge.snapshot()['ready'])
+        self.bridge.observe_title(THREAD)
+        self.assertTrue(self.bridge.snapshot()['ready'])
+
+    def test_title_may_arrive_before_load_response(self):
+        other = 'aaaaaaaa-2222-3333-4444-555555555555'
+        self.bridge.observe_title(other)
+        self.assertFalse(self.bridge.snapshot()['ready'])
+        self.bridge.observe({'result': {'thread': {'id': other}, 'model': 'test-model',
+                                      'reasoningEffort': 'low'}}, {'method': 'thread/start'})
+        self.assertEqual(other, self.bridge.snapshot()['thread_id'])
+        self.assertTrue(self.bridge.snapshot()['ready'])
+
+    def test_closed_thread_cannot_be_selected_by_old_title(self):
+        self.bridge.observe({'method': 'thread/closed', 'params': {'threadId': THREAD}})
+        self.assertFalse(self.bridge.snapshot()['ready'])
+        self.bridge.observe_title(THREAD)
+        self.assertFalse(self.bridge.snapshot()['ready'])
+
+
+class TitleTest(unittest.TestCase):
+    def test_split_title_sequences_and_unrelated_output(self):
+        titles = []
+        parser = TitleOutput(titles.append)
+        stream = (b'conversation ' + THREAD.encode() + b'\x1b[2J\x1b]0;'
+                  + THREAD[:29].encode() + b'... | model\x07'
+                  + b'\x1b]52;c;unrelated\x07\x1b]2;\x1b\\')
+        for byte in stream:
+            parser.feed(bytes([byte]))
+        self.assertEqual([THREAD[:29] + '... | model', ''], titles)
+        self.assertEqual(THREAD[:29], thread_prefix(titles[0]))
+        self.assertIsNone(thread_prefix('text ' + THREAD + ' | ' + THREAD))
+        self.assertIsNone(thread_prefix(THREAD[:20]))
+        self.assertEqual(bytearray(), parser.payload)
+
+    def test_oversized_title_disables_selection_and_parser_recovers(self):
+        titles = []
+        parser = TitleOutput(titles.append)
+        parser.feed(b'\x1b]0;' + b'x' * 5000 + b'\x1b\\')
+        self.assertEqual([''], titles)
+        self.assertEqual(bytearray(), parser.payload)
+        parser.feed(b'\x1b]0;' + THREAD.encode() + b'\x07')
+        self.assertEqual(THREAD, titles[-1])
+
+
+class ServicesTest(unittest.TestCase):
+    def test_display_workers_are_rechecked_while_cli_is_idle(self):
+        stop = threading.Event()
+        checks = []
+        def ensure_adapter():
+            checks.append('adapter')
+            if len(checks) == 2:
+                stop.set()
+        with mock.patch('report.ensure_daemon') as daemon, \
+             mock.patch('adapters.codex_notify.ensure_adapter', side_effect=ensure_adapter):
+            cli.keep_services_alive(stop, interval=0)
+        self.assertEqual(2, daemon.call_count)
+
+    def test_display_failure_does_not_end_cli_or_prevent_retry(self):
+        stop = threading.Event()
+        with mock.patch('report.ensure_daemon', side_effect=[OSError(), None]) as daemon, \
+             mock.patch('adapters.codex_notify.ensure_adapter', side_effect=stop.set):
+            cli.keep_services_alive(stop, interval=0)
+        self.assertEqual(2, daemon.call_count)
 
 
 class FocusTest(unittest.TestCase):
@@ -209,6 +306,8 @@ class FocusTest(unittest.TestCase):
         self.assertIsNone(target.choose_cli(records, 'ghostty'))
         records[-1]['focused'] = False
         self.assertEqual(THREAD, target.choose_cli(records, 'ghostty')['thread_id'])
+        records[-1].update(focused=True, ready=False)
+        self.assertIsNone(target.choose_cli(records, 'ghostty'))
 
     def test_registry_rejects_dead_pid_and_other_socket(self):
         with tempfile.TemporaryDirectory() as d:
