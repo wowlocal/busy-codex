@@ -197,7 +197,7 @@ requests or overwrite the background reader's usage data.
 ## Codex effort dial (Desktop and CLI)
 
 The encoder follows the foreground app: the task open in Codex Desktop's
-primary window, or the focused terminal running `busy-codex-cli`.
+primary window, or the focused terminal running a connected Codex CLI.
 Clockwise increases effort, counterclockwise decreases it; the ends clamp.
 Supported levels come from that model's Codex catalog (the CLI's live
 `model/list` response, or Desktop's local cache). Quick turns are
@@ -229,19 +229,29 @@ mounts and unmounts. Background model output and auto-review sessions cannot
 select a task. The adapter follows the same selection and refreshes on tab
 changes even when the selected task is idle.
 
-For CLI control, install the launcher once from this repository:
+For CLI control, connect the ordinary `codex` command once from this repository:
 
 ```bash
-mkdir -p ~/.local/bin
-ln -s "$(pwd)/codex_cli.py" ~/.local/bin/busy-codex-cli
-busy-codex-cli
+python3 install_codex_cli.py install
+codex --yolo
 # Or continue an existing CLI task:
-busy-codex-cli resume <session-id>
-busy-codex-cli resume --last
+codex resume <session-id> --yolo
 ```
 
-It uses your existing `codex` command, configuration and login, and starts the
-BUSY Bar daemon/adapter as needed. `BUSYBAR_CODEX_CLI_BIN` can select another
+The installer puts a small dispatcher at `~/.local/bin/codex` and preserves
+the original executable or symlink beside it. Interactive startup, resume and
+fork connect automatically. Commands such as `exec`, `app-server`, `login`,
+`update`, help/version, explicit remote connections and calls without a TTY
+go directly to the original CLI. Arguments such as `--yolo`, model and config
+overrides are preserved. `BUSYBAR_CODEX_LAUNCH=0 codex ...` bypasses the bridge;
+`python3 install_codex_cli.py uninstall` restores the original command.
+Existing terminal windows can use the same `codex` command immediately after
+their currently running CLI exits; no shell configuration reload is needed.
+
+The bridge uses your existing configuration and login, and starts the BUSY Bar
+daemon/adapter as needed. As an alternative to installing the dispatcher,
+`python3 codex_cli.py [args]` (or the `busy-codex-cli` symlink) launches it explicitly.
+`BUSYBAR_CODEX_CLI_BIN` can select another
 executable. A recent CLI with `--remote unix://` and `thread/settings/update`
 is required; this was verified with Codex 0.153.4. Existing standalone CLI
 processes must be exited and resumed through the launcher once, because their
@@ -545,6 +555,7 @@ Things discovered the hard way, verified on-device:
 | `adapters/codex_status.py` | Codex adapter (model/effort/speed, context %, quotas — all derived, no name tables) |
 | `codex_usage.py` | Account-level quota polling with bounded freshness and reset-aware refreshes |
 | `codex_cli.py` | CLI launcher and local app-server bridge for live effort changes |
+| `install_codex_cli.py` | Reversible automatic connection for ordinary interactive `codex` commands |
 | `codex_target.py` | Foreground Desktop/terminal selection shared by the adapter and dial |
 | `adapters/install_codex_autostart.py` | hook the adapter into Codex's `notify` so it auto-starts on use |
 | `install_theme.py` | install the on-device "claude" theme (ring + typing companion) |
