@@ -37,7 +37,6 @@ import urllib.error
 import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
-PORT = 8765
 LOG = pathlib.Path.home() / ".claude" / "busybar-daemon.log"
 DOWN_MARK = HERE / ".hub_down"   # touched when the hub is unreachable
 DOWN_BACKOFF_S = 20              # ... then skip forwarding for this long
@@ -50,6 +49,8 @@ PROC = None                      # the daemon this call started (it may still be
 
 def load_env() -> dict:
     env = dict(os.environ)
+    if env.get("BUSYBAR_MANAGED") == "1":
+        return env  # the gallery launcher owns configuration and process lifetime
     try:
         for line in (HERE / "env.sh").read_text().splitlines():
             m = re.match(r'\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=("?)(.*)\2\s*$', line)
@@ -61,6 +62,7 @@ def load_env() -> dict:
 
 
 ENV = load_env()
+PORT = int(ENV.get("BUSYBAR_PORT", "8765"))
 HUB = ENV.get("BUSYBAR_HUB", "").strip().rstrip("/")
 STANDBY = ENV.get("BUSYBAR_STANDBY", "").strip().lower() in ("1", "true", "yes", "on")
 # Forwarder mode talks to the hub and runs nothing here; standby mode talks

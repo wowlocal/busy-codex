@@ -13,6 +13,24 @@ The display core only ever sees the normalized schema below. Provider
 quirks (Claude's `/effort` palette colors, its 5h/7d plan windows, its
 statusline JSON) live in adapters and never reach the renderer.
 
+Reusable device and display components:
+
+- `busybar_http.py` handles device HTTP calls and USB source-address binding.
+  Writes are attempted once; callers retry their current desired state.
+- `busybar_input.py` buffers WebSocket frames across socket timeouts and
+  dispatches ordered input events. Routing stays with the consuming screen.
+- `display_scene.py` combines changed native element groups into one request.
+  It caches only accepted updates, with independent keepalive periods for
+  text and animations. Reconnection does not replay obsolete visual states.
+- [Pixel scenes](PIXEL_UI.md) share font layout, transitions and rendering
+  between native `.anim` playback and offline previews.
+
+`BUSYBAR_PORT` selects the local report port (default 8765),
+`BUSYBAR_APP_NAME` the canvas/asset namespace (default `claude_status`), and
+`BUSYBAR_DRAW_PRIORITY` the canvas priority (default 50). The standalone gallery
+launcher sets its own values and `BUSYBAR_MANAGED=1`; managed workers use the
+launcher's environment instead of reading an adjacent `env.sh`.
+
 ---
 
 ## 1. Reporting protocol (v1)

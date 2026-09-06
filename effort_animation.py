@@ -1,41 +1,16 @@
 """Pixel-exact 72x16 effort labels over increasingly energetic native effects."""
 import math
 
+from pixel_fonts import EFFORT_BOLD
+from pixel_ui import Canvas, SlideFade
+
 W, H, FPS, FRAMES = 72, 16, 25, 45
-TEXT_H = 12
+TEXT_H = EFFORT_BOLD.height
 DURATION_S = FRAMES / FPS
 FADE_FRAMES = 8
 LEVELS = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra')
 
-# Draw at the actual LED resolution. Two-pixel stems and open counters need
-# neither resampling nor dilation, both of which closed up the previous font.
-GLYPHS = {
-    'A': ('0011100', '0111110', '1100011', '1100011', '1100011', '1111111',
-          '1111111', '1100011', '1100011', '1100011', '1100011', '1100011'),
-    'D': ('1111100', '1111110', '1100111', '1100011', '1100011', '1100011',
-          '1100011', '1100011', '1100011', '1100111', '1111110', '1111100'),
-    'E': ('1111111', '1111111', '1100000', '1100000', '1100000', '1111110',
-          '1111110', '1100000', '1100000', '1100000', '1111111', '1111111'),
-    'G': ('0011110', '0111111', '1110000', '1100000', '1100000', '1101111',
-          '1101111', '1100011', '1100011', '1110011', '0111111', '0011110'),
-    'H': ('1100011',) * 5 + ('1111111',) * 2 + ('1100011',) * 5,
-    'I': ('1111',) * 2 + ('0110',) * 8 + ('1111',) * 2,
-    'L': ('1100000',) * 10 + ('1111111',) * 2,
-    'M': ('1100011', '1110111', '1111111', '1111111', '1101011', '1100011',
-          '1100011', '1100011', '1100011', '1100011', '1100011', '1100011'),
-    'N': ('1100011', '1110011', '1110011', '1111011', '1111011', '1101111',
-          '1101111', '1100111', '1100111', '1100011', '1100011', '1100011'),
-    'O': ('0011100', '0111110', '1110111', '1100011', '1100011', '1100011',
-          '1100011', '1100011', '1100011', '1110111', '0111110', '0011100'),
-    'R': ('1111100', '1111110', '1100111', '1100011', '1100111', '1111110',
-          '1111100', '1101100', '1100110', '1100110', '1100011', '1100011'),
-    'T': ('1111111',) * 2 + ('0011000',) * 10,
-    'U': ('1100011',) * 9 + ('1110111', '0111110', '0011100'),
-    'W': ('1100011',) * 6 + ('1101011', '1101011', '1111111', '1111111',
-                           '1110111', '1100011'),
-    'X': ('1100011', '1100011', '0110110', '0110110', '0011100', '0011100',
-          '0011100', '0011100', '0110110', '0110110', '1100011', '1100011'),
-}
+TRANSITION = SlideFade(FRAMES, FADE_FRAMES)
 
 # Color, speed, and motion geometry all change, rather than just tinting a wave.
 PALETTES = (
@@ -52,19 +27,9 @@ SPEEDS = (.2, .4, .65, 1., 1.4, 2., 2.7, 3.6)
 
 
 def word_pixels(word):
-    pixels = set()
-    offset = 0
-    for letter in word:
-        glyph = GLYPHS[letter]
-        pixels.update((offset + x, y) for y, row in enumerate(glyph)
-                      for x, bit in enumerate(row) if bit == '1')
-        offset += len(glyph[0]) + 2
-    return pixels, offset - 2
-
-
-def smoothstep(value):
-    value = max(0., min(1., value))
-    return value * value * (3 - 2 * value)
+    """Compatibility helper for tools that inspect the effort label geometry."""
+    mask = EFFORT_BOLD.layout(word)
+    return mask.pixels, mask.width
 
 
 def background(rank, x, y, t):
@@ -118,30 +83,28 @@ def background(rank, x, y, t):
     return tuple(min(255, round(c + s * spark)) for c, s in zip(rgb, (160, 190, 210)))
 
 
+def _render(rank, mask, frame, direction, entering):
+    alpha, shift = TRANSITION.at(frame, direction, entering)
+    canvas = Canvas(W, H)
+    if alpha:
+        canvas.paint(lambda x, y: background(rank, x, y, frame / FPS), alpha)
+        canvas.draw_mask(mask, (W - mask.width) // 2 + shift,
+                         (H - mask.height) // 2, (245, 250, 255), alpha)
+    return canvas.to_bgra()
+
+
+def frame(effort, index, direction=1, entering=True):
+    """Render one deterministic frame without computing preceding frames."""
+    return _render(LEVELS.index(effort), EFFORT_BOLD.layout(effort.upper()),
+                   index, direction, entering)
+
+
 def frames(effort, direction=1, n=FRAMES, entering=True):
-    word, width = word_pixels(effort.upper())
+    mask = EFFORT_BOLD.layout(effort.upper())
     rank = LEVELS.index(effort)
-    result = []
-    for f in range(n):
-        outro = smoothstep((f - (FRAMES - FADE_FRAMES)) / (FADE_FRAMES - 1))
-        intro = max(0, 1 - f / 3) ** 3 if entering else 0
-        shift = round(direction * (6 * intro - 3 * outro))
-        text = {(x + (W - width) // 2 + shift, y + 2) for x, y in word}
-        # Fully readable after 80 ms; subsequent detents replace the label
-        # immediately at its resting position without replaying its entrance.
-        reveal = smoothstep(f / 2) if entering else 1
-        alpha = round(255 * reveal * (1 - outro))
-        if alpha == 0:
-            result.append(bytes(W * H * 4))
-            continue
-        buf = bytearray()
-        for y in range(H):
-            for x in range(W):
-                rgb = (245, 250, 255) if (x, y) in text else background(rank, x, y, f / FPS)
-                r, g, b = rgb
-                buf.extend((b, g, r, alpha))
-        result.append(bytes(buf))
-    return result
+    # Fully readable after 80 ms; subsequent detents replace the label
+    # immediately at its resting position without replaying its entrance.
+    return [_render(rank, mask, f, direction, entering) for f in range(n)]
 
 
 def filename(effort, direction, entering=True):

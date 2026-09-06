@@ -129,6 +129,26 @@ class ProviderAlertsTest(unittest.TestCase):
 
 
 class BusyInputTest(unittest.TestCase):
+    def test_shared_stream_preserves_monitor_connection_state_and_usb_binding(self):
+        monitor = ai_status.Monitor(object(), threading.Lock(),
+                                    input_url="ws://10.0.4.20/api/status/ws",
+                                    input_source_address="10.0.4.21")
+        stop = threading.Event()
+
+        def observe_state(_stop):
+            options = stream.call_args.kwargs
+            options["on_state"](True, "")
+            self.assertTrue(monitor.input_connected)
+            options["on_state"](False, "device unplugged")
+            self.assertFalse(monitor.input_connected)
+            self.assertEqual("device unplugged", monitor.input_error)
+
+        with mock.patch.object(ai_status, "InputStream") as stream:
+            stream.return_value.run.side_effect = observe_state
+            monitor._input_loop(stop)
+        self.assertEqual("10.0.4.21", stream.call_args.kwargs["source_address"])
+        self.assertEqual(monitor.handle_input_event, stream.call_args.args[1])
+
     def test_input_stream_url_matches_local_sdk_contract(self):
         self.assertEqual(
             "ws://10.0.4.20/api/status/ws",
@@ -226,6 +246,55 @@ class BusyInputTest(unittest.TestCase):
             ["OPENAI", "ANTHROPIC", "X.COM", "GOOGLE", "OPENAI"],
             transport.providers,
         )
+
+
+class MonitorShutdownTest(unittest.TestCase):
+    def test_stop_while_waiting_for_render_lock_cannot_repaint_cleared_canvas(self):
+        stop = threading.Event()
+        waiting = threading.Event()
+        render_lock = threading.Lock()
+        failures = []
+
+        class ObservedLock:
+            def __enter__(self):
+                waiting.set()
+                if not render_lock.acquire(timeout=1):
+                    raise TimeoutError("test renderer did not release its lock")
+
+            def __exit__(self, *_):
+                render_lock.release()
+
+        transport = mock.Mock()
+        monitor = ai_status.Monitor(transport, ObservedLock())
+        monitor.drawn = True
+        monitor.fetch = lambda now=None: ([{
+            "provider": "OPENAI", "status": "down", "surfaces": ["API"],
+        }], [])
+
+        def run():
+            try:
+                monitor.run(stop)
+            except Exception as exc:
+                failures.append(exc)
+
+        # Hold the device lock as shutdown does, then let a pending render
+        # catch up only after the canvas has been cleared and stop was set.
+        render_lock.acquire()
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(waiting.wait(timeout=1), "monitor never reached rendering")
+            stop.set()
+            transport.clear(ai_status.APP_NAME)
+            monitor.drawn = False
+        finally:
+            stop.set()
+            render_lock.release()
+            worker.join(timeout=1)
+        self.assertFalse(worker.is_alive(), "monitor did not stop promptly")
+        self.assertEqual([], failures)
+        transport.draw.assert_not_called()
+        transport.clear.assert_called_once_with(ai_status.APP_NAME)
 
 
 class AlertLayoutTest(unittest.TestCase):

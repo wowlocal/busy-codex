@@ -29,7 +29,6 @@ Layout (72x16 front display):
 from __future__ import annotations
 
 import hmac
-import http.client
 import json
 import math
 import os
@@ -46,19 +45,22 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import ai_status
-import x_pulse
 import codex_effort
 import codex_focus
 import codex_target
 import effort_animation
+from display_scene import DrawCache
+from busybar_http import HttpTransport, local_opener
+from busybar_input import InputStream, input_stream_url
 
 # --------------------------------------------------------------------------
 # Config
 # --------------------------------------------------------------------------
 
-# `daemon.py --port N` exists for test rigs only (a second daemon on the same
-# computer); report.py/report.sh always talk to 8765.
-LISTEN_PORT = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 8765
+# An explicit port supports isolated test rigs and the standalone gallery app.
+# Installed hooks share BUSYBAR_PORT through report.py/report.sh (default 8765).
+LISTEN_PORT = (int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv
+               else int(os.environ.get("BUSYBAR_PORT", "8765")))
 # Bind addresses (env BUSYBAR_LISTEN, comma-separated). Default: loopback +
 # the USB network (device side) only. "0.0.0.0" turns this daemon into the
 # hub for the other computers on your LAN (README: "Several computers").
@@ -120,10 +122,10 @@ ASTRA_WATCH_SCRIPT = os.path.expanduser(os.environ.get(
 X_PULSE_ENABLED = os.environ.get("BUSYBAR_X_PULSE", "").strip().lower() \
     in ("1", "true", "yes", "on")
 X_PULSE_BACKEND = os.environ.get("BUSYBAR_X_PULSE_BACKEND", "bird").strip().lower()
-X_PULSE_SSH_HOST = os.environ.get("BUSYBAR_X_PULSE_SSH_HOST", "mija").strip()
-X_PULSE_APP = os.environ.get("BUSYBAR_X_PULSE_APP", "mija-x").strip()
+X_PULSE_SSH_HOST = os.environ.get("BUSYBAR_X_PULSE_SSH_HOST", "local").strip()
+X_PULSE_APP = os.environ.get("BUSYBAR_X_PULSE_APP", "busy-codex").strip()
 X_PULSE_USERNAME = os.environ.get(
-    "BUSYBAR_X_PULSE_USERNAME", "MishaNevazhno",
+    "BUSYBAR_X_PULSE_USERNAME", "",
 ).strip()
 X_PULSE_POLL_S = max(300.0, float(os.environ.get(
     "BUSYBAR_X_PULSE_POLL_S", "21600",
@@ -159,8 +161,8 @@ X_PULSE_LLM_TIMEOUT_S = max(20.0, float(os.environ.get(
 X_PULSE_CODEX_PATH = os.path.expanduser(os.environ.get(
     "BUSYBAR_X_PULSE_CODEX_PATH", "codex",
 )).strip()
-APP_NAME = "claude_status"   # canvas app name; .anim assets live under it
-DRAW_PRIORITY = 50
+APP_NAME = os.environ.get("BUSYBAR_APP_NAME", "claude_status")  # assets share this namespace
+DRAW_PRIORITY = int(os.environ.get("BUSYBAR_DRAW_PRIORITY", "50"))
 THEME_NAME = "claude"        # installed in /ext/apps_assets/busy/themes/
 SNAPSHOT_POLL_S = 2.0
 
@@ -248,6 +250,9 @@ def _fetch_x_pulse() -> dict:
     )
 
 
+if X_PULSE_ENABLED:
+    import x_pulse  # optional integration; absent from the focused gallery package
+
 X_PULSE_MONITOR = x_pulse.Monitor(
     _fetch_x_pulse,
     interval_s=X_PULSE_POLL_S,
@@ -273,95 +278,9 @@ if X_PULSE_MONITOR is not None:
 # Transports (env BUSYBAR_TRANSPORT: usb | wifi | cloud; see docs/EXTENDING.md)
 # --------------------------------------------------------------------------
 
-class HttpTransport:
-    """Busy Bar HTTP API over any of its three routes. Remembers whether
-    the device answers (device_ok, reported by GET /hub so a standby can
-    step in when the hub cannot draw) and logs only on transitions."""
-
-    TIMEOUT_S = 2.0
-
-    def __init__(self, base: str, headers: dict | None = None, opener=None):
-        self.base = base
-        self.headers = headers or {}
-        self.opener = opener or OPENER       # cloud: proxy-aware; usb/wifi: never
-        self.device_ok: bool | None = None   # None until the first draw/clear
-        self.last_error = ""
-        self.last_http_status: int | None = None
-
-    def _note(self, ok: bool, err: str = ""):
-        if ok:
-            if self.device_ok is False:
-                log(f"device {self.base}: reachable again")
-            self.device_ok, self.last_error = True, ""
-        else:
-            if err != self.last_error:
-                log(f"device {self.base}: {err}")
-            self.device_ok, self.last_error = False, err
-
-    def _request(self, method: str, path: str, body: bytes | None = None) -> bool:
-        headers = dict(self.headers)
-        if body:
-            headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(self.base + path, data=body, method=method,
-                                     headers=headers)
-        try:
-            with self.opener.open(req, timeout=self.TIMEOUT_S) as response:
-                self.last_http_status = response.status
-                self._note(True)
-                return True
-        except urllib.error.HTTPError as e:
-            self.last_http_status = e.code
-            if e.code == 409:   # reachable; an active focus session owns the screen
-                self._note(True)
-            else:
-                self._note(False, f"HTTP {e.code} on {method} {path}")
-            return False
-        except OSError as e:
-            self.last_http_status = None
-            self._note(False, f"{type(e).__name__}: {e}"[:120])
-            return False  # unplugged / offline; retried on the normal cadence
-
-    def draw(self, payload: dict) -> bool:
-        return self._request("POST", "/display/draw", json.dumps(payload).encode())
-
-    def clear(self, app_name: str) -> bool:
-        return self._request(
-            "DELETE", "/display/draw?application_name=" + urllib.parse.quote(app_name)
-        )
-
-    def get_json(self, path: str) -> dict | None:
-        req = urllib.request.Request(self.base + path, headers=self.headers)
-        try:
-            with self.opener.open(req, timeout=self.TIMEOUT_S) as r:
-                return json.loads(r.read())
-        except (OSError, json.JSONDecodeError, urllib.error.HTTPError):
-            return None
-
-    def reachable(self) -> bool:
-        """Cheap liveness check that never touches the canvas."""
-        return self.get_json("/version") is not None
-
-
-class SourceAddressHTTPHandler(urllib.request.HTTPHandler):
-    """Keep USB device traffic off VPNs that also advertise 10.0.4.0/24."""
-
-    def __init__(self, source_address: str):
-        super().__init__()
-        self.source_address = source_address
-
-    def http_open(self, request):
-        def connection(host, **kwargs):
-            return http.client.HTTPConnection(
-                host, source_address=(self.source_address, 0), **kwargs,
-            )
-        return self.do_open(connection, request)
-
-
 def usb_opener():
-    return urllib.request.build_opener(
-        urllib.request.ProxyHandler({}),
-        SourceAddressHTTPHandler(USB_SOURCE_IP),
-    )
+    return local_opener(USB_SOURCE_IP)
+
 
 def make_transport() -> HttpTransport:
     kind = os.environ.get("BUSYBAR_TRANSPORT", "usb")
@@ -369,7 +288,7 @@ def make_transport() -> HttpTransport:
         if STANDBY:
             sys.exit("a standby cannot use the hub's USB link: set BUSYBAR_TRANSPORT=wifi "
                      "(BUSYBAR_DEVICE, BUSYBAR_TOKEN) - setup_claude.py install --standby ...")
-        return HttpTransport("http://10.0.4.20/api", opener=usb_opener())
+        return HttpTransport("http://10.0.4.20/api", opener=usb_opener(), logger=log)
     if kind == "wifi":
         host = os.environ.get("BUSYBAR_DEVICE", "")
         legacy = os.environ.get("BUSYBAR_HOST", "")
@@ -383,7 +302,7 @@ def make_transport() -> HttpTransport:
         headers = {}
         if os.environ.get("BUSYBAR_TOKEN"):
             headers["x-api-token"] = os.environ["BUSYBAR_TOKEN"]
-        t = HttpTransport(f"http://{host}/api", headers)
+        t = HttpTransport(f"http://{host}/api", headers, logger=log)
         t.TIMEOUT_S = 4.0
         return t
     if kind == "cloud":
@@ -392,7 +311,7 @@ def make_transport() -> HttpTransport:
             sys.exit("cloud transport needs BUSYBAR_TOKEN (API token from the BUSY app)")
         t = HttpTransport("https://api.busy.app/busybar",
                           {"authorization": f"Bearer {token}"},
-                          opener=urllib.request.build_opener())   # the internet: proxies apply
+                          opener=urllib.request.build_opener(), logger=log)   # the internet: proxies apply
         t.TIMEOUT_S = 8.0
         return t
     if kind == "ble":
@@ -1232,67 +1151,16 @@ def handle_device_input_event(event: tuple) -> bool:
 
 def device_input_loop(input_url: str, stop: threading.Event,
                       source_address: str | None = None):
-    """Observe switch events using the same local WebSocket as the SDK."""
-    global DEVICE_INPUT_CONNECTED, DEVICE_INPUT_ERROR
-    logged_error = ""
-    while not stop.is_set():
-        sock = None
-        try:
-            sock = ai_status._ws_connect(input_url, source_address=source_address)
-            ai_status._ws_send(sock, 1, b'{"enable":true}')
-            with DEVICE_INPUT_LOCK:
-                DEVICE_INPUT_CONNECTED = True
-                DEVICE_INPUT_ERROR = ""
-            if logged_error:
-                log("BUSY mode observer connected again")
-                logged_error = ""
-            fragments = bytearray()
-            fragment_opcode = None
-            next_ping = time.monotonic() + ai_status.WS_PING_INTERVAL_S
-            while not stop.is_set():
-                if time.monotonic() >= next_ping:
-                    ai_status._ws_send(sock, 9, os.urandom(4))
-                    next_ping = time.monotonic() + ai_status.WS_PING_INTERVAL_S
-                try:
-                    opcode, final, payload = ai_status._ws_recv(sock)
-                except TimeoutError:
-                    continue
-                if opcode == 8:
-                    raise ConnectionError("WebSocket closed")
-                if opcode == 9:
-                    ai_status._ws_send(sock, 10, payload)
-                    continue
-                if opcode == 10:
-                    continue
-                if opcode in (1, 2):
-                    fragments = bytearray(payload)
-                    fragment_opcode = opcode
-                elif opcode == 0 and fragment_opcode is not None:
-                    fragments.extend(payload)
-                else:
-                    continue
-                if not final:
-                    continue
-                if fragment_opcode == 2:
-                    for event in ai_status.parse_input_events(bytes(fragments)):
-                        handle_device_input_event(event)
-                fragments.clear()
-                fragment_opcode = None
-        except (OSError, ValueError, ConnectionError) as exc:
-            error = f"{type(exc).__name__}: {exc}"[:160]
-            with DEVICE_INPUT_LOCK:
-                DEVICE_INPUT_CONNECTED = False
-                DEVICE_INPUT_ERROR = error
-            if error != logged_error and not stop.is_set():
-                log(f"BUSY mode observer unavailable: {error}")
-                logged_error = error
-            stop.wait(timeout=3)
-        finally:
-            if sock is not None:
-                try:
-                    sock.close()
-                except OSError:
-                    pass
+    """Observe hardware events through the shared buffered input stream."""
+    def update_state(connected, error):
+        global DEVICE_INPUT_CONNECTED, DEVICE_INPUT_ERROR
+        with DEVICE_INPUT_LOCK:
+            DEVICE_INPUT_CONNECTED = connected
+            DEVICE_INPUT_ERROR = error
+
+    InputStream(input_url, handle_device_input_event,
+                source_address=source_address, on_state=update_state,
+                logger=log, label="BUSY mode observer").run(stop)
 
 
 def info_elements(status: dict, astra: dict | None = None) -> list[dict]:
@@ -1420,10 +1288,7 @@ def effort_overlay_elements(feedback, direction=1, entering=True):
 
 
 def render_loop(transport: HttpTransport, stop: threading.Event):
-    last_texts = None
-    last_texts_ts = 0.0
-    last_anim = None
-    last_anim_ts = 0.0
+    scene = DrawCache(APP_NAME, DRAW_PRIORITY)
     last_tick = time.time()
     ai_overlay_was_active = False
     last_overlay_key = None
@@ -1449,11 +1314,13 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
             STORE.dirty.wait(timeout=0.25)
             continue
         if ai_overlay_was_active:
-            last_anim, last_texts = None, None
+            scene.reset()
             last_overlay_key = None
             ai_overlay_was_active = False
 
         with RENDER_LOCK:
+            if stop.is_set():
+                break  # shutdown may have cleared the canvas while we waited
             sess = STORE.active_session()
             want = False
             if sess is not None:
@@ -1470,7 +1337,7 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
             force = REDRAW.is_set()
             if force:
                 REDRAW.clear()
-                last_anim, last_texts = None, None
+                scene.reset()
                 last_overlay_key = None
             if HUBLINK is not None:
                 HUBLINK.rendering = want
@@ -1482,7 +1349,7 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                     if HUBLINK is None or HUBLINK.takeover:
                         transport.clear(APP_NAME)
                     DRAWN.clear()
-                    last_anim, last_texts = None, None
+                    scene.reset()
                     last_overlay_key = None
             else:
                 if force:
@@ -1509,33 +1376,29 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                         elements = effort_overlay_elements(feedback, control.get("direction", 1), entering)
                         if transport.draw({"application_name": APP_NAME, "priority": DRAW_PRIORITY,
                                            "elements": elements}):
+                            DRAWN.set()
                             last_overlay_key = overlay_key
                             overlay_drawn_at = time.monotonic()
                             if feedback and feedback != "ERR":
                                 EFFORT_CONTROLLER.mark_drawn(control.get("feedback_revision"))
+                # A detent may arrive during a draw. Return to the newest
+                # confirmed overlay before sending any background refresh.
+                if stop.is_set() or STORE.dirty.is_set():
+                    continue
                 astra = astra_availability()
-                anim = anim_element(
-                    status["state"], status.get("badges"), astra["state"],
-                )
-                if anim["path"] != last_anim or now - last_anim_ts > ANIM_REFRESH_S:
-                    anims = [anim]
-                    if STYLE == "avatar":
-                        anims.append(avatar_element(status["state"]))
-                    # Unspecified Z-order can change when firmware updates an
-                    # element. Keep dashboard refreshes beneath the dial overlay.
-                    anims = [{**element, "z_index": 0} for element in anims]
-                    if transport.draw({"application_name": APP_NAME,
-                                       "priority": DRAW_PRIORITY, "elements": anims}):
-                        last_anim, last_anim_ts = anim["path"], now
-                        DRAWN.set()
+                anims = [anim_element(status["state"], status.get("badges"), astra["state"])]
+                if STYLE == "avatar":
+                    anims.append(avatar_element(status["state"]))
+                anims = [{**element, "z_index": 0} for element in anims]
                 texts = [{**element, "z_index": 2 if element["id"] in ("cfill", "qfill") else 1}
                          for element in info_elements(status, astra)]
-                encoded = json.dumps(texts, sort_keys=True)
-                if encoded != last_texts or now - last_texts_ts > KEEPALIVE_S:
-                    if not texts or transport.draw({"application_name": APP_NAME,
-                                       "priority": DRAW_PRIORITY, "elements": texts}):
-                        last_texts, last_texts_ts = encoded, now
-                        DRAWN.set()
+                # One request updates all changed dashboard groups. Each group
+                # keeps its own keepalive, and failed draws never enter the cache.
+                draw_now = time.monotonic()
+                if scene.draw(transport,
+                              scene.pending("animations", anims, draw_now, ANIM_REFRESH_S),
+                              scene.pending("information", texts, draw_now, KEEPALIVE_S)):
+                    DRAWN.set()
         STORE.dirty.wait(timeout=0.5)
 
 # --------------------------------------------------------------------------
@@ -1835,7 +1698,7 @@ def main():
             threading.Thread(target=EFFORT_CONTROLLER.run, args=(stop,), daemon=True).start()
         local_input_url = ""
         if os.environ.get("BUSYBAR_TRANSPORT", "usb") != "cloud":
-            local_input_url = ai_status.input_stream_url(
+            local_input_url = input_stream_url(
                 transport.base,
                 transport.headers.get("x-api-token", ""),
             )
@@ -1855,6 +1718,9 @@ def main():
                 x_url=X_STATUS_URL,
                 google_url=GOOGLE_STATUS_URL,
                 input_url=local_input_url,
+                input_source_address=(USB_SOURCE_IP
+                                      if transport.base.startswith("http://10.0.4.20/")
+                                      else None),
                 poll_s=AI_STATUS_POLL_S,
                 should_render=lambda: (
                     (HUBLINK is None or HUBLINK.takeover)

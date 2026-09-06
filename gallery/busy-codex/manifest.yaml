@@ -1,0 +1,9 @@
+name: Busy Codex
+author: wowlocal
+description: Live Codex task status, account limits and weekly progress, with a dial for confirmed reasoning effort changes in Codex Desktop and a native-control CLI fork.
+tags:
+  - monitor
+  - info
+  - animation
+preview: ./preview.gif
+repo: https://github.com/wowlocal/busy-codex

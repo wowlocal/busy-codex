@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -198,7 +199,8 @@ def http(method: str, url: str, headers: dict | None = None, body: bytes | None 
 def restart_local_daemon():
     """Ask a running local daemon to exit so the next Claude Code activity
     respawns it with the new env.sh (no-op when none is running)."""
-    if http("POST", "http://127.0.0.1:8765/shutdown", body=b"{}", timeout=1.0) == 200:
+    port = int(read_env().get("BUSYBAR_PORT", os.environ.get("BUSYBAR_PORT", "8765")))
+    if http("POST", f"http://127.0.0.1:{port}/shutdown", body=b"{}", timeout=1.0) == 200:
         print("daemon: stopped; it restarts with the new config on the next activity")
 
 

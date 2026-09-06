@@ -1,9 +1,38 @@
-# busybar-claude-status
+# BUSY Codex
 
-Turn a [BUSY Bar](https://busy.app/) into a live status display for
-[Claude Code](https://claude.com/claude-code): session state, model,
-reasoning effort, context-window usage and plan rate limits — rendered on
-the 72×16 front LED matrix with buttery-smooth native animations.
+Turn a [BUSY Bar](https://busy.app/) into a status display and effort dial for
+Codex Desktop and our native-control Codex CLI fork. Follow the foreground
+task, see weekly quota remaining and progress toward reset, and change effort
+with confirmed settings updates and native animations on the 72×16 display.
+
+The project also supports [Claude Code](https://claude.com/claude-code) and
+other tools through its reporting API. See [Codex integration](#codex-effort-dial-desktop-and-cli)
+and the [extension guide](docs/EXTENDING.md).
+
+## Standalone app and gallery package
+
+Build the complete app folder, then run it in the foreground:
+
+```sh
+python3 scripts/build_gallery.py --output /tmp/busy-codex-gallery/busy-codex
+python3 /tmp/busy-codex-gallery/busy-codex/app.py
+```
+
+The launcher uploads its own animation assets, starts the display and Codex
+adapter, and stops both when closed. It creates no login items and does not
+restart exited workers. Use one instance to own the dial. USB is the default;
+`--host 192.168.1.50` selects Wi-Fi and `--no-effort` enables read-only use.
+
+Try the synthetic animation demo without Codex or account data:
+
+```sh
+python3 run_app.py --host 127.0.0.1:8080 --demo
+```
+
+See [gallery packaging and compatibility](gallery/busy-codex/README.md) and
+[pixel scenes and preview tools](docs/PIXEL_UI.md). The standalone app uses
+its own canvas and loopback port 18765; the installed services retain their
+existing canvas and port 8765.
 
 [中文文档 / Chinese docs](README.zh-CN.md)
 
@@ -112,7 +141,8 @@ settings.json hooks -'      |  session store               /api/display/draw
   undocumented `bicycle0` animation format — uploaded once and played by
   the device itself, so the animation is perfectly smooth with near-zero
   traffic.
-- Everything is Python 3 stdlib. No dependencies.
+- The live runtime uses Python's standard library. Optional PNG/GIF export
+  uses Pillow as a development dependency.
 
 **Not just Claude:** the daemon core is provider-agnostic. Codex, Cursor,
 CI jobs — anything that can run one curl — can drive the display through
@@ -468,7 +498,8 @@ python3 setup_claude.py install --hub http://<hub-name>.local:8765 --standby \
   the pinned Bird CLI and does not call the paid X API. Set
   `BUSYBAR_X_PULSE_SSH_HOST=local` to run Bird beside the daemon, or an SSH
   host to keep the session on another Mac. `xurl` remains available only via
-  the explicit `BUSYBAR_X_PULSE_BACKEND=xurl`; there is no automatic paid
+  the explicit `BUSYBAR_X_PULSE_BACKEND=xurl`, with your own
+  `BUSYBAR_X_PULSE_APP` and `BUSYBAR_X_PULSE_USERNAME`; there is no automatic paid
   fallback.
   The bar color still comes only from the newest applicable `@OpenAI` wording.
   Its fill and the `SEED` / `EARLY` / `GROWING` / `BROAD` / `WIDE` label use a
@@ -558,6 +589,12 @@ Things discovered the hard way, verified on-device:
 | File | Purpose |
 | --- | --- |
 | `daemon.py` | session store + `/status` + device renderer (stdlib only) |
+| `busybar_http.py` | Device HTTP transport and proxy-free USB/Wi-Fi connections |
+| `busybar_input.py` | Shared buffered WebSocket/protobuf input with ordered events and reconnect backoff |
+| `display_scene.py` | Batches changed display groups and caches only acknowledged updates |
+| `pixel_ui.py`, `pixel_fonts.py` | Reusable pixel canvas, bitmap typography and slide/fade transitions |
+| `effort_animation.py` | Effort scenes shared by native playback and offline previews |
+| `preview_effort.py` | Deterministic PNG/GIF/contact-sheet export; optional Pillow dependency |
 | `x_pulse.py` | bounded X Recent Search over SSH + explicit-report classifier/cache |
 | `ai_status.py` | network-only AIWatch monitor + high-priority provider outage overlay |
 | `report.py` / `report.sh` | statusline/hook forwarder; auto-spawns the daemon, or forwards to a LAN hub when `BUSYBAR_HUB` is set (unless `BUSYBAR_STANDBY`) (`.py` = cross-platform, `.sh` = POSIX legacy) |
@@ -580,7 +617,7 @@ Things discovered the hard way, verified on-device:
 
 ## Disclaimers
 
-Not affiliated with BUSY or Anthropic. Tested on BUSY Bar firmware
+Not affiliated with BUSY, OpenAI or Anthropic. Tested on BUSY Bar firmware
 1.1.1 with Claude Code 2.x: the daemon on macOS (Bar on USB), plus a
 Windows machine as a hub client over Wi-Fi. The standby role was
 verified on the Mac with a second daemon (`daemon.py --port 8766`)

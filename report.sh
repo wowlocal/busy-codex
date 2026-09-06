@@ -13,7 +13,7 @@
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG="$HOME/.claude/busybar-daemon.log"
 [ -f "$DIR/env.sh" ] && . "$DIR/env.sh"
-PORT=8765
+PORT=${BUSYBAR_PORT:-8765}
 
 # BUSYBAR_HUB: another computer owns the Bar - forward there, run nothing here.
 # BUSYBAR_STANDBY=1 on top: run the local daemon after all; it mirrors to the
