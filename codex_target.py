@@ -19,11 +19,33 @@ TERMINALS = {'com.mitchellh.ghostty': 'ghostty', 'com.apple.Terminal': 'Apple_Te
 DESKTOP = {'com.openai.codex', 'com.openai.chat', 'com.openai.ChatGPT'}
 
 
-def frontmost_bundle():
-    if sys.platform != 'darwin':
-        return None
-    # NSWorkspace exposes application identity without reading UI content or
-    # requiring Accessibility/Screen Recording. Keep the Objective-C objects local.
+class ProcessSerialNumber(ctypes.Structure):
+    _fields_ = [('high', ctypes.c_uint32), ('low', ctypes.c_uint32)]
+
+
+def frontmost_pid(processes=None):
+    # NSWorkspace.frontmostApplication caches activation until AppKit's main
+    # run loop runs. These headless workers have no AppKit loop: query the
+    # WindowServer's front process on every poll instead.
+    if processes is None:
+        processes = ctypes.CDLL('/System/Library/Frameworks/ApplicationServices.framework/'
+                               'Frameworks/HIServices.framework/HIServices')
+    processes.GetFrontProcess.argtypes = [ctypes.POINTER(ProcessSerialNumber)]
+    processes.GetFrontProcess.restype = ctypes.c_int16  # OSErr
+    processes.GetProcessPID.argtypes = [ctypes.POINTER(ProcessSerialNumber), ctypes.POINTER(ctypes.c_int32)]
+    processes.GetProcessPID.restype = ctypes.c_int32  # OSStatus
+    front, pid = ProcessSerialNumber(), ctypes.c_int32()
+    status = processes.GetFrontProcess(ctypes.byref(front))
+    if status == 0:
+        status = processes.GetProcessPID(ctypes.byref(front), ctypes.byref(pid))
+    if status != 0 or pid.value <= 0:
+        raise OSError(f'macOS foreground process unavailable (status={status})')
+    return pid.value
+
+
+def bundle_for_pid(pid):
+    # Bundle identity is stable for a process; this does not read UI content
+    # or require Accessibility/Screen Recording.
     ctypes.CDLL('/System/Library/Frameworks/AppKit.framework/AppKit')
     objc = ctypes.CDLL('/usr/lib/libobjc.A.dylib')
     objc.objc_getClass.argtypes = [ctypes.c_char_p]
@@ -31,18 +53,24 @@ def frontmost_bundle():
     objc.sel_registerName.argtypes = [ctypes.c_char_p]
     objc.sel_registerName.restype = ctypes.c_void_p
     send = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(('objc_msgSend', objc))
+    send_pid = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                               ctypes.c_int32)(('objc_msgSend', objc))
     string = ctypes.CFUNCTYPE(ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p)(('objc_msgSend', objc))
     def msg(value, selector):
         return send(value, objc.sel_registerName(selector.encode()))
     pool = msg(msg(objc.objc_getClass(b'NSAutoreleasePool'), 'alloc'), 'init')
     try:
-        workspace = msg(objc.objc_getClass(b'NSWorkspace'), 'sharedWorkspace')
-        app = msg(workspace, 'frontmostApplication')
+        app = send_pid(objc.objc_getClass(b'NSRunningApplication'),
+                       objc.sel_registerName(b'runningApplicationWithProcessIdentifier:'), pid)
         bundle = msg(app, 'bundleIdentifier')
         value = string(bundle, objc.sel_registerName(b'UTF8String')) if bundle else None
         return value.decode() if value else None
     finally:
         msg(pool, 'drain')
+
+
+def frontmost_bundle():
+    return bundle_for_pid(frontmost_pid()) if sys.platform == 'darwin' else None
 
 
 def cli_sessions(home):
@@ -82,17 +110,23 @@ class Target:
         self.selected = None
         self.last_display = None
         self.error = ''
+        self.bundle = None
+
+    def snapshot(self):
+        return {**(self.selected or {'source': None, 'thread_id': None, 'error': self.error}),
+                'foreground_bundle': self.bundle}
 
     def status(self, force=False):
         with self.lock:
             now = time.monotonic()
-            if now < self.next_poll:
-                return dict(self.selected or {'source': None, 'thread_id': None, 'error': self.error})
+            if not force and now < self.next_poll:
+                return self.snapshot()
             self.next_poll = now + .2
             self.selected = None
             self.error = ''
+            self.bundle = None
             try:
-                bundle = self.foreground()
+                bundle = self.bundle = self.foreground()
                 if bundle in DESKTOP:
                     thread_id = codex_focus.FOCUS.current(force=force)
                     if thread_id:
@@ -114,7 +148,7 @@ class Target:
                 self.error = str(error)
             if self.selected:
                 self.last_display = dict(self.selected)
-            return dict(self.selected or {'source': None, 'thread_id': None, 'error': self.error})
+            return self.snapshot()
 
     def current(self, force=False):
         return self.status(force).get('thread_id')

@@ -257,7 +257,7 @@ If the CLI loads several task views (for example through its agent picker),
 control pauses: cached view switches are not exposed by the server protocol.
 Explicitly resuming a task restores an unambiguous target.
 
-On macOS, application identity comes from `NSWorkspace`, with terminal tab/pane
+On macOS, application identity comes from a fresh foreground-process lookup, with terminal tab/pane
 focus supplied by the terminal's focus reports. Ghostty, Terminal, iTerm2,
 WezTerm, Kitty, Alacritty and Warp are recognized. Multiplexers must forward
 focus reports. If several launchers report focus, the dial pauses until one is
@@ -292,6 +292,11 @@ the launcher are not controlled.
 target, model, effort and errors. `BUSYBAR_CODEX_LOG_DIR` overrides the Desktop
 log directory. `BUSYBAR_CODEX_IPC` overrides the socket path; `BUSYBAR_CODEX_EFFORT=0` disables
 the controller without disabling the quota display.
+
+`codex_target.foreground_bundle` shows the app observed by the background
+process. `device_input.last_encoder` records the latest dial event, whether it
+was accepted and why it was ignored. macOS foreground polling works without an
+AppKit event loop, including after locking/unlocking or changing apps.
 
 ## Display styles
 

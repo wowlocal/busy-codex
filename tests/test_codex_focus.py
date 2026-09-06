@@ -88,9 +88,9 @@ class FocusTest(unittest.TestCase):
             with mock.patch.object(codex_status, 'SESSIONS', Path(d)), \
                  mock.patch.object(codex_status, '_FOCUSED_ROLLOUTS', {}), \
                  mock.patch.dict(codex_status.report.ENV, {'BUSYBAR_CODEX_THREAD_ID':''}), \
-                 mock.patch.object(codex_status.codex_focus.FOCUS, 'current', return_value=A):
+                 mock.patch.object(codex_status.TARGET, 'display', return_value={'thread_id': A}):
                 self.assertEqual(selected, codex_status.newest_rollout())
-            with mock.patch.object(codex_status.codex_focus.FOCUS, 'current', return_value=None), \
+            with mock.patch.object(codex_status.TARGET, 'display', return_value={}), \
                  mock.patch.dict(codex_status.report.ENV, {'BUSYBAR_CODEX_THREAD_ID':''}):
                 self.assertIsNone(codex_status.newest_rollout())
 

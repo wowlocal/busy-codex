@@ -156,6 +156,36 @@ class BridgeTest(unittest.TestCase):
 
 
 class FocusTest(unittest.TestCase):
+    def test_headless_foreground_reads_pid_again_after_app_switch(self):
+        api = mock.Mock()
+        front_pid = [101]
+        def get_front(serial):
+            serial._obj.low = front_pid[0]
+            return 0
+        def get_pid(serial, pid):
+            pid._obj.value = serial._obj.low
+            return 0
+        api.GetFrontProcess.side_effect = get_front
+        api.GetProcessPID.side_effect = get_pid
+        self.assertEqual(101, target.frontmost_pid(api))
+        front_pid[0] = 202
+        self.assertEqual(202, target.frontmost_pid(api))
+        api.GetFrontProcess.side_effect = lambda _: -600
+        with self.assertRaisesRegex(OSError, 'foreground process unavailable'):
+            target.frontmost_pid(api)
+
+    def test_force_refresh_does_not_reuse_lock_screen_or_previous_app(self):
+        foreground = ['com.apple.loginwindow']
+        selector = target.Target(foreground=lambda: foreground[0])
+        self.assertIsNone(selector.current())
+        self.assertEqual('com.apple.loginwindow', selector.status()['foreground_bundle'])
+        foreground[0] = 'com.openai.codex'
+        with mock.patch.object(target.codex_focus.FOCUS, 'current', return_value=THREAD):
+            self.assertEqual(THREAD, selector.current(force=True))
+        foreground[0] = 'com.google.Chrome'
+        self.assertIsNone(selector.current(force=True))
+        self.assertEqual('com.google.Chrome', selector.status()['foreground_bundle'])
+
     def test_split_focus_sequences_and_paste_are_distinguished(self):
         changes = []
         reader = cli.FocusInput(changes.append)

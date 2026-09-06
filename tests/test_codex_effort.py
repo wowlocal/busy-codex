@@ -108,6 +108,18 @@ class EffortTest(unittest.TestCase):
             daemon.handle_device_input_event(('encoder', -2))
             control.rotate.assert_called_once_with(-2)
 
+    def test_rejected_encoder_event_records_the_blocking_reason(self):
+        with mock.patch.object(daemon, 'EFFORT_CONTROLLER', mock.Mock()), \
+             mock.patch.object(daemon, 'effort_input_allowed', return_value=False), \
+             mock.patch.object(daemon, 'effort_input_block_reason', return_value='No foreground task'), \
+             mock.patch.object(daemon, 'log') as log, \
+             mock.patch.object(daemon, 'LAST_ENCODER', {}):
+            self.assertFalse(daemon.handle_device_input_event(('encoder', 2)))
+            self.assertEqual(2, daemon.LAST_ENCODER['delta'])
+            self.assertFalse(daemon.LAST_ENCODER['handled'])
+            self.assertEqual('No foreground task', daemon.LAST_ENCODER['reason'])
+            log.assert_called_once_with('Codex dial ignored: No foreground task')
+
 
 class AnimationTest(unittest.TestCase):
     def test_all_labels_fit_and_native_codec_roundtrips(self):

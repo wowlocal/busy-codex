@@ -509,6 +509,7 @@ DEVICE_INPUT_LOCK = threading.Lock()
 DEVICE_MODE: str | None = None
 DEVICE_INPUT_CONNECTED = False
 DEVICE_INPUT_ERROR = ""
+LAST_ENCODER = {}
 EFFORT_CONTROLLER = None
 
 
@@ -528,13 +529,24 @@ def effort_target_info():
     return codex_target.FOCUS.status()
 
 
-def effort_input_allowed():
+def effort_input_block_reason():
+    target = effort_target()
+    if not target:
+        return effort_target_info().get('error') or 'No Codex task selected'
     session = STORE.active_session()
-    return (session is not None and session.get("control_thread_id") == effort_target()
-            and session.get("control_thread_id") is not None
-            and device_canvas_allowed() and DEVICE_MODE not in ("OFF", "UNKNOWN")
-            and DRAWN.is_set() and not (AI_MONITOR and AI_MONITOR.drawn)
-            and (HUBLINK is None or HUBLINK.takeover))
+    if session is None or session.get('control_thread_id') != target:
+        return 'Waiting for the display adapter to select the foreground task'
+    if not device_canvas_allowed() or DEVICE_MODE in ('OFF', 'UNKNOWN'):
+        return 'Device mode owns the dial'
+    if not DRAWN.is_set() or (AI_MONITOR and AI_MONITOR.drawn):
+        return 'Codex status is not being displayed'
+    if HUBLINK is not None and not HUBLINK.takeover:
+        return 'Another hub owns the display'
+    return ''
+
+
+def effort_input_allowed():
+    return not effort_input_block_reason()
 
 
 # --------------------------------------------------------------------------
@@ -1182,13 +1194,23 @@ def device_canvas_allowed() -> bool:
 
 def handle_device_input_event(event: tuple) -> bool:
     """Track the mode selector and route OK to an active Astra Watch app."""
-    global DEVICE_MODE
+    global DEVICE_MODE, LAST_ENCODER
     if not event:
         return False
     if event[0] == "encoder":
+        handled = False
+        reason = ''
         if EFFORT_CONTROLLER and effort_input_allowed():
-            return EFFORT_CONTROLLER.rotate(event[1])
-        return False
+            handled = EFFORT_CONTROLLER.rotate(event[1])
+            if not handled:
+                reason = EFFORT_CONTROLLER.status().get('error') or 'Codex settings connection is not ready'
+        else:
+            reason = effort_input_block_reason() if EFFORT_CONTROLLER else 'Effort controller is disabled'
+        with DEVICE_INPUT_LOCK:
+            LAST_ENCODER = {'at': time.time(), 'delta': event[1], 'handled': bool(handled), 'reason': reason}
+        if not handled:
+            log(f'Codex dial ignored: {reason}')
+        return handled
     if event[0] == "button":
         if event[1:3] == (0, 0) and astra_app_status()["active"]:
             request_astra_refresh()
@@ -1556,6 +1578,7 @@ class Handler(BaseHTTPRequestHandler):
                 "device_input": {
                     "connected": DEVICE_INPUT_CONNECTED,
                     "error": DEVICE_INPUT_ERROR,
+                    "last_encoder": LAST_ENCODER or None,
                 },
                 "codex_effort": (EFFORT_CONTROLLER.status() if EFFORT_CONTROLLER
                                  else {"enabled": False}),
