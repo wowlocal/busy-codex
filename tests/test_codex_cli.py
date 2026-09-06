@@ -152,6 +152,62 @@ class BridgeTest(unittest.TestCase):
         finally:
             client.close()
 
+    def test_missing_ack_is_reconciled_only_from_confirmed_live_settings(self):
+        client = CLIIPC(self.bridge.control_path, lambda _: None)
+        client.connect(THREAD)
+        real_request = self.bridge.request_backend
+        def lost_ack(method, params):
+            real_request(method, params)
+            with self.bridge.condition:
+                self.assertTrue(self.bridge.condition.wait_for(
+                    lambda: self.bridge.state['effort'] == 'xhigh', timeout=2))
+            raise TimeoutError('CLI settings request timed out')
+        try:
+            with mock.patch.object(self.bridge, 'request_backend', side_effect=lost_ack) as write:
+                result = client.request('thread-follower-update-thread-settings',
+                                        {'threadSettings': {'effort': 'xhigh'}})
+            self.assertEqual('xhigh', result['result']['effort'])
+            self.assertEqual(1, write.call_count)
+        finally:
+            client.close()
+
+    def test_timeout_without_matching_live_state_is_still_an_error(self):
+        client = CLIIPC(self.bridge.control_path, lambda _: None)
+        client.connect(THREAD)
+        try:
+            with mock.patch.object(self.bridge, 'request_backend',
+                                   side_effect=TimeoutError('CLI settings request timed out')) as write:
+                with self.assertRaisesRegex(ValueError, 'timed out'):
+                    client.request('thread-follower-update-thread-settings',
+                                   {'threadSettings': {'effort': 'xhigh'}})
+            self.assertEqual('high', self.bridge.snapshot()['effort'])
+            self.assertEqual(1, write.call_count)
+        finally:
+            client.close()
+
+    def test_timeout_cannot_confirm_a_different_visible_task(self):
+        client = CLIIPC(self.bridge.control_path, lambda _: None)
+        client.connect(THREAD)
+        def changed_selection(method, params):
+            self.bridge.observe_title('no selected task')
+            raise TimeoutError('CLI settings request timed out')
+        try:
+            with mock.patch.object(self.bridge, 'request_backend', side_effect=changed_selection):
+                with self.assertRaisesRegex(ValueError, 'timed out'):
+                    client.request('thread-follower-update-thread-settings',
+                                   {'threadSettings': {'effort': 'xhigh'}})
+        finally:
+            client.close()
+
+    def test_rpc_error_diagnostics_do_not_expose_server_payload(self):
+        message = cli.settings_error({'code': -32600,
+            'message': 'thread not found: private-content', 'data': 'private-content'})
+        self.assertIn('RPC -32600; task is not loaded', message)
+        self.assertNotIn('private-content', message)
+        unknown = cli.settings_error({'message': 'private-content'})
+        self.assertIn('unclassified', unknown)
+        self.assertNotIn('private-content', unknown)
+
     def test_background_history_reads_leave_visible_task_controllable(self):
         self.rpc('thread/read', {'threadId': 'other-view'})
         self.assertTrue(self.bridge.snapshot()['ready'])

@@ -77,3 +77,59 @@ To repeat the native check explicitly with your installed CLI and login:
 ```sh
 python3 tests/check_codex_cli_live.py /path/to/native/codex-or-launcher
 ```
+
+## Codex Micro / Work Louder comparison
+
+The [official Codex Micro product page](https://openai.com/supply/co-lab/work-louder/)
+describes a reasoning dial and task status lights. It does not publish a CLI
+attachment API. The implementations below were inspected at these commits:
+
+| Implementation | Actual control path | Relevance to BUSY Bar |
+| --- | --- | --- |
+| [mpociot/codex-micro-stream-deck-emulator protocol](https://github.com/mpociot/codex-micro-stream-deck-emulator/blob/7093bd48f0bcb953f623b40c727470e545b48df3/src/protocol.js), [development notes](https://github.com/mpociot/codex-micro-stream-deck-emulator/blob/7093bd48f0bcb953f623b40c727470e545b48df3/DEVELOPMENT.md) | Emulates vendor HID hardware for Desktop. Encoder notifications use `v.oai.hid`, `ENC_CW` / `ENC_CC`, and `act: 2`; the host sends status through `v.oai.thstatus`. Desktop owns the active task and effort mapping. The software shim patches Electron's `node-hid`; the virtual HID alternative requires a restricted Apple entitlement. | A Desktop hardware integration, not an API into an independently running CLI. No shim was installed and Desktop was not relaunched. |
+| [maxxspotter/codex-micro-app controller](https://github.com/maxxspotter/codex-micro-app/blob/cf323ada1e9716073d0748caea503f6e0974ba1c/apps/mac-companion/Sources/CodexMicroCore/ControllerActions.swift), [shim control](https://github.com/maxxspotter/codex-micro-app/blob/cf323ada1e9716073d0748caea503f6e0974ba1c/apps/mac-companion/Sources/CodexMicroCore/CodexMicroShimControl.swift) | StandardBridge reads the live composer context and supported efforts, updates the conversation through its owner client, then waits for matching composer settings. NativeShim instead sends an encoder step and leaves mapping to Desktop. | Confirms the ownership + live confirmation pattern used by our Desktop controller. The project explicitly targets Desktop, not CLI. |
+
+Local native source was also inspected at
+`/Users/michael/Developer/@oss/codex`, commit
+`0cf189a2e4d1b71f3feb899b0f08c845da6aeee9`.
+The native [reasoning shortcuts](https://github.com/openai/codex/blob/0cf189a2e4d1b71f3feb899b0f08c845da6aeee9/codex-rs/tui/src/chatwidget/reasoning_shortcuts.rs)
+operate on the visible widget, respect modal and parent-owned-task restrictions,
+and intentionally require the advanced picker to enter Max/Ultra. Simulated
+keystrokes would therefore not be an equivalent replacement for the current
+settings control contract. The [settings processor](https://github.com/openai/codex/blob/0cf189a2e4d1b71f3feb899b0f08c845da6aeee9/codex-rs/app-server/src/request_processors/turn_processor.rs)
+accepts `thread/settings/update` for loaded tasks, validates direct-input
+ownership and submits the native settings operation.
+
+### Follow-up ERR investigation
+
+At 11:47:45 local time the running bridge reported a native rejection, but its
+old error handler discarded the RPC code and reason. At 11:48:09 another
+request timed out. Native logs show a settings request and a settings-updated
+event at 11:48:06, but do not include enough correlation or settings data to
+prove that event confirmed this particular dial change.
+
+On an uncertain timeout the client now opens a fresh control connection and
+reads live settings for the same selected task. It accepts success only if
+both model and requested effort match; it never repeats the write. A real
+rejection or unmatched/changed selection remains an error. Rejection diagnostics
+now retain a numeric RPC code and a bounded, allowlisted reason category,
+without copying arbitrary native error payloads. Controller logs include the
+target kind, task ID and requested effort.
+
+The opt-in full wrapper check exercises production `main()` and `run_tui()` in
+addition to the bridge. Its only bridge changes mark new tasks ephemeral and
+export test assertions; selection still comes from production title handling.
+Native TUI output independently confirms effort. Verified all advertised Astra
+levels from Low through Ultra and restoration to Low; ordinary launch and Plan
+mode are checked separately. No model prompts are submitted. These successful
+checks do not establish the cause of the user's earlier native rejection.
+
+```sh
+python3 tests/check_codex_cli_wrapper_live.py /path/to/native/codex-or-launcher
+python3 tests/check_codex_cli_wrapper_live.py /path/to/native/codex-or-launcher --model gpt-6-astra --all-levels
+python3 tests/check_codex_cli_wrapper_live.py /path/to/native/codex-or-launcher --plan
+```
+
+The timeout reconciliation runs in the display daemon and can be deployed
+without closing CLI sessions. Improved native rejection classification lives
+in the CLI bridge and takes effect on subsequent CLI launches.

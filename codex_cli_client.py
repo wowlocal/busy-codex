@@ -75,6 +75,25 @@ class CLIIPC:
     def request(self, method, params, target=None):
         if method != 'thread-follower-update-thread-settings':
             raise ValueError('Unsupported CLI control operation')
-        return self.rpc({'method': 'set_effort', 'effort': params['threadSettings']['effort'],
-                         'expected_thread_id': self.thread_id, 'expected_model': self.state['model'],
-                         'expected_effort': self.state['effort']})
+        thread_id, model = self.thread_id, self.state['model']
+        effort = params['threadSettings']['effort']
+        try:
+            return self.rpc({'method': 'set_effort', 'effort': effort,
+                             'expected_thread_id': thread_id, 'expected_model': model,
+                             'expected_effort': self.state['effort']})
+        except (ValueError, OSError) as error:
+            # An accepted operation can outlive the request/ack timeout. Read
+            # the live bridge again before reporting failure; never resend a
+            # dial step or infer success from the value we attempted to write.
+            uncertain = (isinstance(error, TimeoutError) or str(error) in (
+                'CLI settings request timed out', 'CLI did not confirm effort change'))
+            if not uncertain:
+                raise
+            self.close()
+            try:
+                self.connect(thread_id)
+                if self.state['model'] == model and self.state['effort'] == effort:
+                    return {'result': self.state}
+            except (OSError, ValueError, KeyError):
+                pass
+            raise error

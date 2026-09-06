@@ -285,6 +285,7 @@ class Controller:
                     stop.wait(0.1)
                     continue
                 delta = 0
+                requested_effort = None
                 try:
                     if ipc is None:
                         with self.lock:
@@ -321,6 +322,7 @@ class Controller:
                         raise CatalogError(f'Current effort={current!r} absent from catalog '
                                            f'for model={model!r}; levels={levels}')
                     effort = levels[max(0, min(len(levels) - 1, levels.index(current) + delta))]
+                    requested_effort = effort
                     if effort != current:
                         ipc.request('thread-follower-update-thread-settings',
                                     {'conversationId': target, 'threadSettings': effort_settings(state, effort)},
@@ -359,7 +361,8 @@ class Controller:
                         self.feedback = 'ERR' if delta else None
                         self.feedback_revision += 1
                         self.feedback_until = time.monotonic() + 2.5
-                    self.logger(f'Codex effort unavailable: {error}')
+                    self.logger(f'Codex effort unavailable: kind={self.kind} thread={target} '
+                                f'requested={requested_effort} {error}')
                     self.changed()
                     retry_at = time.monotonic() + 3
         finally:

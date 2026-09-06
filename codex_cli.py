@@ -30,6 +30,28 @@ from codex_cli_title import TITLE_CONFIG, TitleOutput, thread_prefix
 MAX_MESSAGE = 256 * 1024 * 1024
 
 
+def settings_error(error):
+    """Retain actionable RPC diagnostics without logging arbitrary server data."""
+    error = error if isinstance(error, dict) else {}
+    code = error.get('code')
+    code = str(code) if type(code) is int else 'unknown'
+    message = error.get('message')
+    reason = 'unclassified'
+    if isinstance(message, str):
+        for prefix, category in (
+            ('direct app-server input is not allowed for multi-agent v2 sub-agents', 'parent-owned task'),
+            ('thread not found:', 'task is not loaded'),
+            ('invalid thread id:', 'invalid task ID'),
+            ('invalid thread settings override:', 'invalid settings'),
+            ('failed to update thread settings:', 'settings submission failed'),
+            ('thread listener is not running', 'task listener stopped'),
+        ):
+            if message.startswith(prefix):
+                reason = category
+                break
+    return f'CLI rejected the settings change (RPC {code}; {reason})'
+
+
 def read_exact(sock, size):
     result = bytearray()
     while len(result) < size:
@@ -143,7 +165,7 @@ class Bridge:
             with self.condition:
                 self.pending.pop(rid, None)
         if 'error' in result:
-            raise RuntimeError('CLI rejected the settings change')
+            raise RuntimeError(settings_error(result['error']))
         return result.get('result')
 
     def forward_client(self, message):
