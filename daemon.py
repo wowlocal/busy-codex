@@ -435,6 +435,7 @@ DEVICE_INPUT_ERROR = ""
 LAST_ENCODER = {}
 LAST_START = {}
 START_DOWN = False
+CROWN_DOWN = False
 EFFORT_CONTROLLER = None
 
 
@@ -1127,7 +1128,7 @@ def device_canvas_allowed() -> bool:
 
 def handle_device_input_event(event: tuple) -> bool:
     """Route START to Fast, the dial to effort, and OK to Astra Watch."""
-    global DEVICE_MODE, LAST_ENCODER, LAST_START, START_DOWN
+    global DEVICE_MODE, LAST_ENCODER, LAST_START, START_DOWN, CROWN_DOWN
     if not event:
         return False
     if event[0] == "encoder":
@@ -1166,6 +1167,17 @@ def handle_device_input_event(event: tuple) -> bool:
             if not handled:
                 log(f'Codex START ignored: {reason}')
             return handled
+        if len(event) >= 3 and event[1] == 0 and not astra_app_status()["active"]:
+            with DEVICE_INPUT_LOCK:
+                if event[2] == 1:
+                    CROWN_DOWN = False
+                    return False
+                if event[2] != 0 or CROWN_DOWN:
+                    return False
+                CROWN_DOWN = True
+            return bool(EFFORT_CONTROLLER and effort_input_allowed() and EFFORT_CONTROLLER.crown())
+        if event[1:3] == (1, 0) and EFFORT_CONTROLLER:
+            return EFFORT_CONTROLLER.cancel_menu()
         if event[1:3] == (0, 0) and astra_app_status()["active"]:
             request_astra_refresh()
             request_x_pulse_refresh(force=True)
@@ -1180,6 +1192,8 @@ def handle_device_input_event(event: tuple) -> bool:
         changed = mode != DEVICE_MODE
         DEVICE_MODE = mode
     if changed:
+        if EFFORT_CONTROLLER:
+            EFFORT_CONTROLLER.cancel_menu()
         STORE.dirty.set()
     return changed
 
@@ -1188,12 +1202,14 @@ def device_input_loop(input_url: str, stop: threading.Event,
                       source_address: str | None = None):
     """Observe hardware events through the shared buffered input stream."""
     def update_state(connected, error):
-        global DEVICE_INPUT_CONNECTED, DEVICE_INPUT_ERROR, START_DOWN
+        global DEVICE_INPUT_CONNECTED, DEVICE_INPUT_ERROR, START_DOWN, CROWN_DOWN
         with DEVICE_INPUT_LOCK:
             DEVICE_INPUT_CONNECTED = connected
             DEVICE_INPUT_ERROR = error
             if not connected:
-                START_DOWN = False
+                START_DOWN = CROWN_DOWN = False
+                if EFFORT_CONTROLLER:
+                    EFFORT_CONTROLLER.cancel_menu()
 
     InputStream(input_url, handle_device_input_event,
                 source_address=source_address, on_state=update_state,
@@ -1327,12 +1343,29 @@ def effort_overlay_elements(feedback, direction=1, entering=True):
     ]
 
 
+def model_menu_elements(menu):
+    from adapters.codex_status import prettify_model
+    name = prettify_model(menu['model']) if menu else ' '
+    while est_width(name) > 66:
+        name = name[:-1]
+    hint = f"{menu['index'] + 1}/{menu['count']} CLICK OK" if menu else ' '
+    return [
+        {**_rect('model_menu_bg', 0, 0, 72, 16, '#091122FF' if menu else '#00000000'),
+         'z_index': 110, 'timeout': 2},
+        {**_text('model_menu_name', 3, 0, 'top_left', name, '#BFA0FFFF'),
+         'z_index': 111, 'timeout': 2},
+        {**_text('model_menu_hint', 3, 8, 'top_left', hint, '#60BFFFFF'),
+         'z_index': 111, 'timeout': 2},
+    ]
+
+
 def render_loop(transport: HttpTransport, stop: threading.Event):
     scene = DrawCache(APP_NAME, DRAW_PRIORITY)
     last_tick = time.time()
     ai_overlay_was_active = False
     last_overlay_key = None
     overlay_drawn_at = 0.0
+    menu_was_visible = False
     while not stop.is_set():
         STORE.dirty.clear()
         now = time.time()
@@ -1399,6 +1432,12 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                 control = EFFORT_CONTROLLER.status() if EFFORT_CONTROLLER else {}
                 feedback = (control.get("feedback")
                             if control.get("thread_id") == sess.get("control_thread_id") else None)
+                menu = (control.get('model_menu') if control.get('thread_id') == sess.get('control_thread_id')
+                        and effort_input_allowed() else None)
+                if menu or menu_was_visible:
+                    if transport.draw({'application_name': APP_NAME, 'priority': DRAW_PRIORITY,
+                                       'elements': model_menu_elements(menu)}):
+                        menu_was_visible = bool(menu)
                 # Detent feedback goes out before quota text/ring refreshes.
                 # Those can each occupy a USB round trip, even while hidden.
                 overlay_key = ((control.get("thread_id"), feedback, control.get("feedback_revision"))

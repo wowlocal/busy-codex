@@ -19,7 +19,7 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = (
     "daemon.py", "display_scene.py", "busybar_input.py", "busybar_http.py", "ai_status.py",
-    "codex_effort.py", "codex_fast.py", "fast_animation.py", "codex_focus.py", "codex_target.py", "codex_usage.py",
+    "codex_effort.py", "codex_model_menu.py", "codex_fast.py", "fast_animation.py", "codex_focus.py", "codex_target.py", "codex_usage.py",
     "codex_cli_native.py", "codex_cli_client.py", "report.py",
     "adapters/codex_status.py", "effort_animation.py", "pixel_ui.py", "pixel_fonts.py",
 )

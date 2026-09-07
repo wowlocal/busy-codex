@@ -44,7 +44,12 @@ class NativeCLIIPC(CLIIPC):
         if method != 'thread-follower-update-thread-settings':
             raise ValueError('Unsupported native CLI operation')
         settings = params['threadSettings']
-        if 'serviceTier' in settings:
+        if 'model' in settings:
+            if settings['model'] not in [item['model'] for item in self.state.get('models', [])]:
+                raise ValueError('Restart the updated native CLI with model selection support')
+            key, expected = 'effort', settings['effort']
+            command = {'method': 'model/set', 'model': settings['model'], 'effort': expected}
+        elif 'serviceTier' in settings:
             tier = settings['serviceTier']
             fast_tier = self.state.get('fastServiceTier')
             if not fast_tier or tier not in (fast_tier, 'default'):
@@ -55,7 +60,7 @@ class NativeCLIIPC(CLIIPC):
             key, expected = 'effort', settings['effort']
             command = {'method': 'effort/set', 'effort': expected}
         request_id = str(uuid.uuid4())
-        instance, model = self.state['instanceId'], self.state['model']
+        instance, model = self.state['instanceId'], settings.get('model', self.state['model'])
         try:
             result = self.raw_rpc({**command, 'requestId': request_id,
                 'expectedRevision': self.state['revision'],

@@ -26,8 +26,13 @@ Hiding an app with **⌘H** keeps the last selected task and its confirmed
 settings on the display. Switching between Desktop and CLI updates the
 dashboard without briefly returning to the Bar's menu.
 
-Changes apply to subsequent turns and preserve the current model and Plan
-mode. They leave a running answer alone and do not change global defaults.
+Click the **Crown** to open the model picker, rotate to browse, and click again
+to apply the selection and return to effort control. Browsing sends no settings
+requests. After 12 seconds without input, the picker closes without applying.
+Back also cancels, but the firmware may exit the app at the same time.
+CLI model selection requires a fork build with the native `model/set` endpoint.
+
+Changes apply to subsequent turns and preserve Plan mode. They leave a running answer alone and do not change global defaults.
 The label appears after Codex confirms the setting.
 
 **Effort has a different feel at each level:** calm flows at lower settings,

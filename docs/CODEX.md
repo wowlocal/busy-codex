@@ -197,3 +197,14 @@ so frequent turns do not multiply account requests.
 Foreground runs print logs to the terminal. The service logs are
 `~/.claude/busybar-daemon.log` and `~/.claude/busybar-codex-adapter.log`
 (the directory name is retained from the original integration).
+
+### Crown model picker
+
+Press Crown to browse models, turn to select, then press Crown again to apply
+and return to effort. Back, a target change, or 12 seconds without input cancels
+the preview. Back may also exit the device app because it is a firmware button.
+The CLI must expose `models` in its native snapshot and accept `model/set`;
+older builds keep effort and Fast controls but do not open the model picker.
+Desktop uses visible entries in its model cache. Unsupported effort falls back
+to the selected model's default; Plan mode and global config are preserved.
+Unsent Desktop drafts still have no controllable thread.

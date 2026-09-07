@@ -90,3 +90,13 @@ MIT; see `LICENSE`, including the original Alpharius-003 copyright notice.
 The project extends that MIT codebase; its pixel font and effort effects are
 included as source. No account details, access tokens or personal configuration
 are included.
+
+### Crown model selection
+
+Click Crown to open the model picker, rotate to browse, then click again to
+apply and return to effort control. After 12 seconds without input the preview
+is canceled. Back cancels too, but may also exit the app through the firmware.
+CLI model selection requires the `model/set` endpoint from the latest
+[Codex fork branch](https://github.com/wowlocal/codex/tree/codex/native-tui-control).
+Existing builds without that endpoint continue to support effort and Fast.
+Desktop controls require a sent task; unsent drafts are not exposed by its IPC.

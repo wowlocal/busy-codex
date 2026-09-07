@@ -59,7 +59,7 @@ class NativeClientTest(unittest.TestCase):
                     value = json.loads(line)
                     if value['method'] == 'status/read':
                         result = self.state
-                    elif value['method'] in ('effort/set', 'fast/set'):
+                    elif value['method'] in ('effort/set', 'fast/set', 'model/set'):
                         self.writes.append(value)
                         self.write_received.set()
                         self.allow_write.wait(2)
@@ -67,17 +67,38 @@ class NativeClientTest(unittest.TestCase):
                             result = {'requestId': value['requestId'], 'status': 'rejected',
                                       'outcome': {'error': 'selection or settings changed'}}
                         else:
-                            key = 'effort' if value['method'] == 'effort/set' else 'serviceTier'
+                            key = 'effort' if value['method'] in ('effort/set', 'model/set') else 'serviceTier'
+                            if value['method'] == 'model/set':
+                                self.state['model'] = value['model']
                             setting = value['effort'] if key == 'effort' else ('priority' if value['enabled'] else 'default')
                             self.state.update({key: setting, 'revision': self.state['revision'] + 1})
                             result = {'requestId': value['requestId'], 'status': 'applied', 'outcome': {
-                                'threadId': THREAD, 'model': 'test-model', key: setting}}
+                                'threadId': THREAD, 'model': self.state['model'], key: setting}}
                         self.results[value['requestId']] = result
                         if self.drop_ack:
                             break
                     else:
                         result = self.results[value['requestId']]
                     connection.sendall(json.dumps({'result': result}).encode() + b'\n')
+
+    def test_model_menu_confirmation_and_lost_ack_apply_once(self):
+        self.state['models'] = [dict(model=m, name=m, levels=['low', 'high'], default='low')
+                                for m in ['test-model', 'other-model']]
+        self.drop_ack = True
+        with self.controller() as controller:
+            deadline = time.monotonic() + 2
+            while not controller.model_choices and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertTrue(controller.crown())
+            self.assertTrue(controller.rotate(1))
+            self.assertEqual([], self.writes)
+            self.assertTrue(controller.crown())
+            while controller.status()['model'] != 'other-model' and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertEqual('other-model', controller.status()['model'])
+            self.assertEqual(1, len(self.writes))
+            self.assertEqual('model/set', self.writes[0]['method'])
+            self.assertEqual('plan', self.state['collaborationMode'])
 
     def test_lost_reply_queries_original_request_without_repeating_write(self):
         self.drop_ack = True

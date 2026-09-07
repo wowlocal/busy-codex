@@ -20,6 +20,7 @@ import uuid
 
 from effort_animation import DURATION_S
 import codex_fast
+from codex_model_menu import ModelMenu, model_settings
 
 LEVELS = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra')
 STATE_KEYS = {'latestThreadSettings', 'latestModel', 'latestReasoningEffort',
@@ -39,6 +40,7 @@ class ModelCatalog:
         self.clock = clock
         self.known = {}
         self.current = {}
+        self.choices = []
         self.read_error = ''
         self.refresh()  # Warm before the first dial event, including every model.
 
@@ -55,12 +57,18 @@ class ModelCatalog:
                              if isinstance(r, dict)}
                 current[entry['slug']] = [level for level in LEVELS if level in supported]
             self.current = current
+            self.choices = [dict(model=e['slug'], name=e.get('display_name') or e['slug'],
+                                 levels=current[e['slug']], default=e.get('default_reasoning_level'))
+                            for e in data['models'] if isinstance(e, dict)
+                            and e.get('slug') in current and current[e['slug']]
+                            and e.get('visibility') == 'list']
             now = self.clock()
             for model, levels in current.items():
                 self.known[model] = (levels, now)
             self.read_error = ''
         except (OSError, ValueError, TypeError) as error:
             self.current = {}
+            self.choices = []
             self.read_error = type(error).__name__
 
     def levels_for(self, model):
@@ -230,6 +238,9 @@ class Controller:
         self.revision = None
         self.pending = 0
         self.pending_fast = deque()
+        self.menu = None
+        self.pending_model = None
+        self.model_choices = []
         self.due = 0
         self.last_applied_at = 0
         self.pending_since = 0
@@ -251,8 +262,11 @@ class Controller:
     def status(self, display_thread_id=None):
         with self.lock:
             model, effort = model_effort(self.state)
+            if self.menu and time.monotonic() >= self.menu.until:
+                self.menu = None
             return {'enabled': True, 'connected': self.connected, 'thread_id': self.thread_id,
                     'kind': self.kind,
+                    'model_menu': self.menu.snapshot() if self.menu else None,
                     'model': model, 'effort': effort, 'error': self.error,
                     'service_tier': codex_fast.current_tier(self.state),
                     'fast': codex_fast.is_fast(self.state),
@@ -263,6 +277,36 @@ class Controller:
                     'feedback_revision': self.feedback_revision,
                     'feedback': self.feedback if time.monotonic() < self.feedback_until else None}
 
+    def crown(self):
+        if not self.allowed():
+            return False
+        target, _, key = self.selection()
+        with self.lock:
+            if (not target or target != self.thread_id or not self.connected
+                    or (self.target_key is not None and key != self.target_key)):
+                return False
+            now = time.monotonic()
+            if self.menu and now < self.menu.until:
+                self.pending_model = (self.menu.snapshot(), now)
+                self.menu = None
+            else:
+                if not self.model_choices or self.pending_model:
+                    return False
+                self.menu = ModelMenu(self.model_choices, model_effort(self.state)[0], now)
+                self.pending = 0
+                self.feedback = None
+        self.changed()
+        self.wake.set()
+        return True
+
+    def cancel_menu(self):
+        with self.lock:
+            active = self.menu is not None
+            self.menu = None
+        if active:
+            self.changed()
+        return active
+
     def rotate(self, delta):
         if not self.allowed():
             return False
@@ -271,6 +315,13 @@ class Controller:
             if not target or target != self.thread_id or not self.connected:
                 return False
             if self.target_key is not None and key != self.target_key:
+                return False
+            if self.menu and time.monotonic() < self.menu.until:
+                self.menu.rotate(delta, time.monotonic())
+                self.changed()
+                return True
+            self.menu = None
+            if self.pending_model:
                 return False
             if not self.pending:
                 self.pending_since = time.monotonic()
@@ -319,6 +370,7 @@ class Controller:
     def run(self, stop):
         ipc = None
         retry_at = 0
+        catalog_at = 0
         try:
             while not stop.is_set():
                 self.wake.clear()
@@ -332,6 +384,8 @@ class Controller:
                         self.target_key, self.kind = target_key, info.get('kind', 'desktop')
                         self.state, self.revision, self.pending = {}, None, 0
                         self.pending_fast.clear()
+                        self.menu = self.pending_model = None
+                        self.model_choices = []
                         self.connected, self.feedback, self.error = False, None, ''
                         self.confirmation_ms = self.display_ms = None
                         self.last_applied_at = self.feedback_input_at = 0
@@ -342,6 +396,7 @@ class Controller:
                     continue
                 delta = 0
                 fast_at = None
+                model_request = None
                 requested = None
                 try:
                     if ipc is None:
@@ -369,24 +424,45 @@ class Controller:
                     readable = select.select([ipc.sock], [], [], 0)[0]
                     if readable:
                         ipc.receive()
+                    if time.monotonic() >= catalog_at:
+                        self.catalog.refresh()
+                        catalog_at = time.monotonic() + 2
                     with self.lock:
+                        self.model_choices = (ipc.state.get('models', []) if self.kind == 'cli'
+                                              else self.catalog.choices)
+                        model_request = self.pending_model
+                        self.pending_model = None
                         delta = self.pending if time.monotonic() >= self.due else 0
                         fast_at = (self.pending_fast.popleft() if self.pending_fast
                                    and (not self.pending or self.pending_fast[0] < self.pending_since) else None)
-                        if fast_at is not None:
+                        if model_request is not None:
+                            if fast_at is not None:
+                                self.pending_fast.appendleft(fast_at)
+                            fast_at = None
                             delta = 0
-                        input_at = fast_at if fast_at is not None else self.pending_since
+                        elif fast_at is not None:
+                            delta = 0
+                        input_at = model_request[1] if model_request else (fast_at if fast_at is not None else self.pending_since)
                         if delta:
                             self.pending = 0
                         state = copy.deepcopy(self.state)
-                    if (not delta and fast_at is None) or self.selection()[2] != target_key or not self.allowed():
+                    if (not delta and fast_at is None and model_request is None) or self.selection()[2] != target_key or not self.allowed():
                         with self.lock:
                             wait = min(.05, max(0, self.due - time.monotonic())) if self.pending else .05
                         if not readable:
                             self.wake.wait(wait)
                         continue
                     model, current = model_effort(state)
-                    if fast_at is not None:
+                    if model_request is not None:
+                        choice = model_request[0]
+                        if choice['model'] not in [item['model'] for item in self.model_choices]:
+                            raise CatalogError('Selected model is no longer available')
+                        settings = model_settings(state, choice['model'], choice['levels'], choice['default'])
+                        requested = settings['effort']
+                        feedback = requested.upper()
+                        def confirmed():
+                            return model_effort(self.state) == (choice['model'], requested)
+                    elif fast_at is not None:
                         try:
                             settings, enabled = codex_fast.toggle_settings(state, self.home, self.kind)
                         except (OSError, ValueError, KeyError, TypeError) as error:
@@ -453,7 +529,8 @@ class Controller:
                         self.connected = False
                         self.pending = 0
                         self.pending_fast.clear()
-                        self.feedback = 'ERR' if delta or fast_at is not None else None
+                        self.menu = self.pending_model = None
+                        self.feedback = 'ERR' if delta or fast_at is not None or model_request else None
                         self.feedback_revision += 1
                         self.feedback_until = time.monotonic() + 2.5
                     self.logger(f'Codex effort unavailable: kind={self.kind} thread={target} '
