@@ -48,6 +48,9 @@ to the dashboard. See the [effort comparison](docs/img/effort-levels.gif) and
 | **Small upper bar** | Time elapsed toward the account's next weekly reset. |
 | **Animated border + state** | Thinking, working, waiting, done, error or idle. Fast uses a gold working border. |
 
+`DONE` animates for **5 seconds** after completion, then becomes `IDLE`.
+Routine status and quota refreshes do not restart the animation.
+
 Weekly usage comes from the signed-in Codex account and refreshes every minute,
 including while the task is idle. Reset progress follows the account's actual
 quota window. It is neither calendar-week progress nor context usage. Missing

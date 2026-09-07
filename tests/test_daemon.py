@@ -74,6 +74,44 @@ class WeekProgressTest(unittest.TestCase):
             self.assertIsNone(daemon.parse_quotas([{'left_pct': value}])[0]['left_pct'])
 
 
+class CompletionTimeoutTest(unittest.TestCase):
+    def test_repeated_completion_reports_do_not_restart_done_animation(self):
+        store = daemon.Store()
+        with mock.patch.object(daemon.time, 'time', return_value=100) as clock:
+            store.report('codex', 'task', {'state': 'COMPLETE'})
+            clock.return_value = 104
+            store.report('codex', 'task', {'state': 'COMPLETE', 'label': 'Updated limits'})
+            self.assertEqual('COMPLETE', daemon.effective_state(store.active_session()))
+            clock.return_value = 105
+            self.assertEqual('IDLE', daemon.effective_state(store.active_session()))
+            clock.return_value = 120
+            store.report('codex', 'task', {'state': 'COMPLETE'})
+            self.assertEqual('IDLE', daemon.effective_state(store.active_session()))
+            self.assertEqual(100, store.active_session()['state_ts'])
+            self.assertEqual(120, store.active_session()['last_active'])
+
+    def test_a_new_turn_gets_its_own_completion_timeout(self):
+        store = daemon.Store()
+        with mock.patch.object(daemon.time, 'time', return_value=100) as clock:
+            store.report('codex', 'task', {'state': 'COMPLETE'})
+            clock.return_value = 110
+            store.report('codex', 'task', {'state': 'WORKING'})
+            clock.return_value = 112
+            store.report('codex', 'task', {'state': 'COMPLETE'})
+            clock.return_value = 116
+            self.assertEqual('COMPLETE', daemon.effective_state(store.active_session()))
+            clock.return_value = 117
+            self.assertEqual('IDLE', daemon.effective_state(store.active_session()))
+
+    def test_mirrored_completion_uses_the_origins_timestamp(self):
+        store = daemon.Store()
+        with mock.patch.object(daemon.time, 'time', return_value=110):
+            store.report('codex', 'task', {'state': 'COMPLETE', 'state_ts': 100}, mirrored=True)
+            self.assertEqual('IDLE', daemon.effective_state(store.active_session()))
+            store.report('codex', 'task', {'state': 'COMPLETE', 'state_ts': 109}, mirrored=True)
+            self.assertEqual('COMPLETE', daemon.effective_state(store.active_session()))
+
+
 class FastContourTest(unittest.TestCase):
     def test_fast_changes_only_the_working_contour(self):
         self.assertEqual("work.anim", daemon.anim_element("WORKING")["path"])

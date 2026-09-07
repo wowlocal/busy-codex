@@ -40,7 +40,7 @@ macOS 直连 Bar，Windows 作为枢纽客户端经 Wi-Fi 转发；备用枢纽�
 - Codex fast + WORKING — 黄色高速流动轮廓，无独立徽章，避免与文字重叠
 - GPT-6 Astra 可用 — 快速彩虹庆祝轮廓 + 五个白色高亮流星
 - THINKING — effortUltra 紫双波峰行波（2s 周期）
-- COMPLETE — 绿色呼吸（2.8s；30 秒后回落 IDLE）
+- COMPLETE — 绿色呼吸（2.8s；5 秒后回落 IDLE，重复状态上报不会重置计时）
 - WAIT — 橙色急促脉冲（0.88s）+ 设备状态 LED 同闪
 - ERROR / FAILED — 红色 2Hz 爆闪
 - IDLE — 暗灰常亮；空闲 10 分钟后清屏交还设备

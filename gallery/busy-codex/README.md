@@ -8,6 +8,9 @@ Press the large START button to toggle Fast mode: gold warp ignition for Fast,
 blue deceleration for standard speed. Holding it does not repeat the toggle.
 Fast uses more plan allowance, just like enabling it inside Codex.
 
+After a task completes, DONE animates for five seconds and then becomes IDLE.
+Status and quota refreshes do not restart this timer.
+
 This is an independent community app, not an OpenAI or BUSY Bar product.
 
 ## Run

@@ -171,7 +171,7 @@ TEXT_TIMEOUT_S = 15
 ANIM_TIMEOUT_S = 120
 ANIM_REFRESH_S = 60.0
 KEEPALIVE_S = 8.0
-COMPLETE_HOLD_S = 30.0
+COMPLETE_HOLD_S = 5.0
 # Idle release: after this many seconds of IDLE the screen is handed
 # back to the device (env BUSYBAR_IDLE_CLEAR_S; 0 = keep forever).
 IDLE_CLEAR_AFTER_S = float(os.environ.get("BUSYBAR_IDLE_CLEAR_S", "600"))
@@ -378,7 +378,10 @@ class Store:
                             new == "WORKING" and prev in ("IDLE", "COMPLETE")):
                         s["focus_ts"] = now
                     s["state"] = new
-                    s["state_ts"] = fields.get("state_ts", now)
+                    # Repeated snapshots are keepalives, not new completions.
+                    # Mirrors may supply the origin's actual transition time.
+                    if created or new != prev or "state_ts" in fields:
+                        s["state_ts"] = fields.get("state_ts", now)
                 if "focus_ts" in fields:
                     s["focus_ts"] = fields["focus_ts"]   # mirrored: the origin decided
                 for k in ("label", "label_color", "context_pct", "quotas", "quota_status",
@@ -740,7 +743,7 @@ ROLE = "standby" if STANDBY else "hub" if "0.0.0.0" in LISTEN_ADDRS else "local"
 
 def effective_state(sess: dict) -> str:
     state = sess["state"]
-    if state == "COMPLETE" and time.time() - sess["state_ts"] > COMPLETE_HOLD_S:
+    if state == "COMPLETE" and time.time() - sess["state_ts"] >= COMPLETE_HOLD_S:
         return "IDLE"
     return state
 

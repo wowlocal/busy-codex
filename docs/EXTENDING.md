@@ -81,7 +81,8 @@ Semantics:
   `GET /status` shows which one is shown (`source`, `host`).
 - Every field except `source`/`session_id` degrades gracefully when
   missing — a state-only reporter still gets the ring + state word.
-- `COMPLETE` auto-decays to `IDLE` after 30 s; `IDLE` releases the
+- `COMPLETE` auto-decays to `IDLE` after 5 s; repeated completion reports
+  do not restart that timer. `IDLE` releases the
   screen after 10 min.
 
 `GET /status` returns the same normalized shape (what the renderer and
