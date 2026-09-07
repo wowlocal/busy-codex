@@ -436,6 +436,8 @@ LAST_ENCODER = {}
 LAST_START = {}
 START_DOWN = False
 CROWN_DOWN = False
+LAST_CROWN = {}
+LAST_BUTTON = {}
 EFFORT_CONTROLLER = None
 
 
@@ -1128,7 +1130,7 @@ def device_canvas_allowed() -> bool:
 
 def handle_device_input_event(event: tuple) -> bool:
     """Route START to Fast, the dial to effort, and OK to Astra Watch."""
-    global DEVICE_MODE, LAST_ENCODER, LAST_START, START_DOWN, CROWN_DOWN
+    global DEVICE_MODE, LAST_ENCODER, LAST_START, START_DOWN, CROWN_DOWN, LAST_CROWN, LAST_BUTTON
     if not event:
         return False
     if event[0] == "encoder":
@@ -1146,6 +1148,8 @@ def handle_device_input_event(event: tuple) -> bool:
             log(f'Codex dial ignored: {reason}')
         return handled
     if event[0] == "button":
+        with DEVICE_INPUT_LOCK:
+            LAST_BUTTON = {'at': time.time(), 'button': event[1], 'action': event[2]}
         if len(event) >= 3 and event[1] == 2:  # START; PRESS=0, RELEASE=1
             with DEVICE_INPUT_LOCK:
                 if event[2] == 1:
@@ -1175,7 +1179,16 @@ def handle_device_input_event(event: tuple) -> bool:
                 if event[2] != 0 or CROWN_DOWN:
                     return False
                 CROWN_DOWN = True
-            return bool(EFFORT_CONTROLLER and effort_input_allowed() and EFFORT_CONTROLLER.crown())
+            reason = effort_input_block_reason() if EFFORT_CONTROLLER else 'Codex controls are disabled'
+            handled = bool(not reason and EFFORT_CONTROLLER.crown())
+            if not handled and not reason:
+                control = EFFORT_CONTROLLER.status()
+                reason = control.get('error') or ('CLI model selection requires an updated CLI process'
+                         if control.get('kind') == 'cli' else 'Model catalog or settings connection is not ready')
+            with DEVICE_INPUT_LOCK:
+                LAST_CROWN = {'at': time.time(), 'handled': handled, 'reason': reason}
+            log(f'Codex Crown: {"handled" if handled else reason}')
+            return handled
         if event[1:3] == (1, 0) and EFFORT_CONTROLLER:
             return EFFORT_CONTROLLER.cancel_menu()
         if event[1:3] == (0, 0) and astra_app_status()["active"]:
@@ -1528,6 +1541,8 @@ class Handler(BaseHTTPRequestHandler):
                     "error": DEVICE_INPUT_ERROR,
                     "last_encoder": LAST_ENCODER or None,
                     "last_start": LAST_START or None,
+                    "last_crown": LAST_CROWN or None,
+                    "last_button": LAST_BUTTON or None,
                 },
                 "codex_effort": (EFFORT_CONTROLLER.status() if EFFORT_CONTROLLER
                                  else {"enabled": False}),

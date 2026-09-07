@@ -55,7 +55,7 @@ class ModelMenuTest(unittest.TestCase):
         import daemon
         c = self.controller()
         with patch.object(daemon, 'EFFORT_CONTROLLER', c), patch.object(daemon, 'CROWN_DOWN', False), \
-                patch.object(daemon, 'effort_input_allowed', return_value=True), \
+                patch.object(daemon, 'effort_input_block_reason', return_value=''), \
                 patch.object(daemon, 'astra_app_status', return_value={'active': False}):
             self.assertTrue(daemon.handle_device_input_event(('button', 0, 0)))
             self.assertFalse(daemon.handle_device_input_event(('button', 0, 0)))
