@@ -22,6 +22,9 @@ animations that get more intense as effort rises.
 The controls follow the **foreground app**: the open task in Codex Desktop,
 or the focused terminal running our Codex CLI fork. Switch tasks and the
 controls follow you. When the target is ambiguous, writes pause.
+Hiding an app with **⌘H** keeps the last selected task and its confirmed
+settings on the display. Switching between Desktop and CLI updates the
+dashboard without briefly returning to the Bar's menu.
 
 Changes apply to subsequent turns and preserve the current model and Plan
 mode. They leave a running answer alone and do not change global defaults.

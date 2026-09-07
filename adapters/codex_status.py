@@ -184,8 +184,8 @@ def _rollout_snapshot(path: pathlib.Path) -> dict:
     return dict(_ROLLOUT_CACHE["snapshot"])
 
 
-def probe(usage=None) -> dict | None:
-    target = selected_target()
+def probe(usage=None, selection=None) -> dict | None:
+    target = selected_target() if selection is None else selection
     rollout = newest_rollout(target)
     defaults = config_defaults()
     if rollout is None and not defaults and not target.get('model'):
@@ -260,14 +260,15 @@ def post(report: dict) -> bool:
         return False
 
 
-def _emit(verbose: bool, usage=None):
-    report = probe(usage)
+def _emit(verbose: bool, usage=None, selection=None):
+    report = probe(usage, selection)
     if report:
         if verbose:
             print(json.dumps(report, ensure_ascii=False), flush=True)
-        post(report)
+        return post(report)
     elif verbose:
         print("no codex data found", flush=True)
+    return False
 
 
 def main():
@@ -300,6 +301,7 @@ def watch(monitor, stop, verbose):
     # Quota updates also trigger a report while the selected task is idle.
     last_stamp = None
     previous = None
+    retired = set()
     last_report_at = 0
     quiet_rechecked = False
     while not stop.is_set():
@@ -307,23 +309,29 @@ def watch(monitor, stop, verbose):
         rollout = newest_rollout(target)
         stat = rollout.stat() if rollout else None
         session_id = target.get('thread_id') or 'config'
-        stamp = (session_id, target.get('model'), target.get('effort'), target.get('state'),
+        stamp = (session_id, target.get('kind'), target.get('ready'), target.get('model'),
+                 target.get('effort'), target.get('state'), tuple(target.get('badges') or []),
                  target.get('context_pct'), stat.st_mtime_ns if stat else None, stat.st_size if stat else None)
-        if session_id != previous:
-            if previous:
-                post({"source": "codex", "session_id": previous, "ended": True})
-            previous = session_id
         if (stamp != last_stamp or monitor.changed.is_set()
                 or time.time() - last_report_at >= 20):
-            monitor.changed.clear()
-            last_stamp = stamp
-            last_report_at = time.time()
-            quiet_rechecked = False
-            _emit(verbose, monitor.snapshot())
+            # Publish the replacement before retiring the previous session.
+            # Otherwise the renderer sees an empty store and clears its canvas,
+            # exposing the firmware menu between Desktop and CLI tasks.
+            if _emit(verbose, monitor.snapshot(), target):
+                if previous and previous != session_id:
+                    retired.add(previous)
+                retired.discard(session_id)
+                previous = session_id
+                monitor.changed.clear()
+                last_stamp = stamp
+                last_report_at = time.time()
+                quiet_rechecked = False
         elif (not quiet_rechecked and stat is not None
               and time.time() - stat.st_mtime > QUIET_RECHECK_S):
-            _emit(verbose, monitor.snapshot())
-            quiet_rechecked = True
+            quiet_rechecked = _emit(verbose, monitor.snapshot(), target)
+        for session in tuple(retired):
+            if post({"source": "codex", "session_id": session, "ended": True}):
+                retired.remove(session)
         stop.wait(POLL_S)
 
 

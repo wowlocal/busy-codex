@@ -6,6 +6,7 @@ from unittest import mock
 
 from adapters import codex_status
 import codex_usage
+import daemon
 
 
 class RolloutSnapshotTest(unittest.TestCase):
@@ -89,6 +90,61 @@ class RolloutSnapshotTest(unittest.TestCase):
             codex_status.watch(monitor, stop, False)
         self.assertEqual([62, 55], [call.args[1]['quotas'][0]['left_pct']
                                    for call in emit.call_args_list])
+
+
+class SelectionHandoffTest(unittest.TestCase):
+    def watch_selection(self, *, fail_new=False, fail_cleanup=False):
+        store = daemon.Store()
+        target = [{'kind': 'cli', 'thread_id': 'first', 'model': 'gpt-test',
+                   'effort': 'high', 'state': 'WORKING', 'ready': True}]
+        stop = mock.Mock()
+        stop.is_set.side_effect = (False, False, False, True)
+        stop.wait.side_effect = lambda _: target[0].update(thread_id='second', state='IDLE')
+        monitor = codex_usage.Monitor(fetch=lambda _: {})
+        attempts = []
+        active = []
+
+        def send(payload):
+            attempts.append(dict(payload))
+            if fail_new and payload['session_id'] == 'second' and not payload.get('ended'):
+                return False
+            if fail_cleanup and payload.get('ended') and len([p for p in attempts if p.get('ended')]) == 1:
+                return False
+            store.report(payload['source'], payload['session_id'], payload)
+            active.append(store.active_session())
+            return True
+
+        with mock.patch.object(codex_status, 'selected_target', side_effect=lambda: dict(target[0])), \
+             mock.patch.object(codex_status, 'newest_rollout', return_value=None), \
+             mock.patch.object(codex_status, 'config_defaults', return_value={}), \
+             mock.patch.object(codex_status, 'post', side_effect=send):
+            codex_status.watch(monitor, stop, False)
+        return store, attempts, active
+
+    def test_new_session_arrives_before_old_one_is_retired(self):
+        store, _, active = self.watch_selection()
+        self.assertTrue(all(active), 'An empty store exposes the firmware menu')
+        self.assertEqual({'codex:second'}, set(store.sessions))
+
+    def test_failed_new_report_preserves_display_and_retries(self):
+        store, attempts, active = self.watch_selection(fail_new=True)
+        self.assertTrue(all(active))
+        self.assertEqual({'codex:first'}, set(store.sessions))
+        self.assertEqual(2, len([p for p in attempts if p['session_id'] == 'second']))
+        self.assertFalse(any(p.get('ended') for p in attempts))
+
+    def test_failed_retirement_is_retried_without_an_empty_display(self):
+        store, _, active = self.watch_selection(fail_cleanup=True)
+        self.assertTrue(all(active))
+        self.assertEqual({'codex:second'}, set(store.sessions))
+
+    def test_probe_uses_one_selection_snapshot(self):
+        selected = {'kind': 'cli', 'thread_id': 'selected', 'model': 'gpt-test',
+                    'effort': 'high', 'ready': True}
+        with mock.patch.object(codex_status, 'selected_target', side_effect=AssertionError('Selection raced')), \
+             mock.patch.object(codex_status, 'newest_rollout', return_value=None), \
+             mock.patch.object(codex_status, 'config_defaults', return_value={}):
+            self.assertEqual('selected', codex_status.probe(selection=selected)['session_id'])
 
 
 if __name__ == "__main__":

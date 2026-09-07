@@ -46,6 +46,12 @@ forward focus reports. If several sessions claim focus, control pauses until
 the target is unambiguous. Switching to an unrelated app disables writes while
 keeping the usage display available.
 
+When an app is hidden or focus reports are still arriving, the display keeps
+the last selected task. Its last confirmed model, effort and Fast setting stay
+visible; they do not authorize writes while the task is unfocused. A replacement
+session is published before the previous report is retired, so a Desktop/CLI
+handoff does not leave an empty display.
+
 When migrating from the old command shim, run
 `python3 install_codex_cli.py uninstall` to restore the original command, then
 point `codex` at the updated fork launcher. The legacy bridge remains only for

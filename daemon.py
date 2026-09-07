@@ -767,13 +767,19 @@ def status_snapshot() -> dict:
         if finite_number(observed_at):
             quota_status["age_s"] = max(0, round(now - observed_at, 1))
     label = sess.get("label")
+    badges = sess.get("badges")
     if EFFORT_CONTROLLER:
-        control = EFFORT_CONTROLLER.status()
-        if (control["connected"] and control["thread_id"] == sess.get("control_thread_id")
-                and control["model"] and control["effort"]):
+        control = EFFORT_CONTROLLER.status(display_thread_id=sess.get("control_thread_id"))
+        settings = (control if control.get("connected")
+                    and control.get("thread_id") == sess.get("control_thread_id")
+                    else control.get("display", {})) if sess.get("control_thread_id") else {}
+        if settings.get("model") and settings.get("effort"):
             from adapters.codex_status import prettify_model
-            label = shorten_model_label(prettify_model(control["model"]),
-                                        control["effort"], LABEL_MAX_PX)
+            label = shorten_model_label(prettify_model(settings["model"]),
+                                        settings["effort"], LABEL_MAX_PX)
+        if settings.get("fast") is not None:
+            badges = [badge for badge in badges or [] if badge not in ("fast", "priority")]
+            badges += ["fast"] if settings["fast"] else []
     return {
         "source": sess["source"],
         "state": effective_state(sess),
@@ -783,7 +789,7 @@ def status_snapshot() -> dict:
         "quotas": quotas or None,
         "quota_status": quota_status or None,
         "week_progress_pct": week_progress_pct(weekly_quota(quotas), now),
-        "badges": sess.get("badges"),
+        "badges": badges,
         "host": sess.get("host"),
         "host_tag": sess.get("host_tag"),
         "age_s": round(now - sess["last_active"], 1),
@@ -1388,10 +1394,6 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                     transport.clear(APP_NAME)
                 status = status_snapshot()
                 control = EFFORT_CONTROLLER.status() if EFFORT_CONTROLLER else {}
-                if (control.get("connected") and control.get("thread_id") == sess.get("control_thread_id")
-                        and control.get("fast") is not None):
-                    badges = [badge for badge in status.get("badges") or [] if badge not in ("fast", "priority")]
-                    status["badges"] = badges + (["fast"] if control["fast"] else [])
                 feedback = (control.get("feedback")
                             if control.get("thread_id") == sess.get("control_thread_id") else None)
                 # Detent feedback goes out before quota text/ring refreshes.

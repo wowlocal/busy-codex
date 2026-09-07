@@ -309,6 +309,37 @@ class ServicesTest(unittest.TestCase):
 
 
 class FocusTest(unittest.TestCase):
+    def test_hidden_desktop_keeps_last_display_without_granting_control(self):
+        foreground = ['com.openai.codex']
+        selector = target.Target(foreground=lambda: foreground[0], sessions=lambda _: [])
+        with mock.patch.object(target.codex_focus.FOCUS, 'current', return_value=THREAD) as desktop:
+            self.assertEqual(THREAD, selector.current(force=True))
+            foreground[0] = 'com.google.Chrome'
+            for hidden_log_target in (None, 'background-desktop-task'):
+                desktop.return_value = hidden_log_target
+                self.assertIsNone(selector.current(force=True))
+                self.assertEqual(THREAD, selector.display()['thread_id'])
+
+    def test_terminal_focus_gap_and_hidden_new_task_keep_last_display(self):
+        foreground = ['com.mitchellh.ghostty']
+        record = {'thread_id': THREAD, 'terminal': 'ghostty', 'focused': True,
+                  'ready': True, 'socket': '/tmp/a'}
+        selector = target.Target(foreground=lambda: foreground[0], sessions=lambda _: [record])
+        with mock.patch.object(target.codex_focus.FOCUS, 'current', return_value='desktop-task'):
+            self.assertEqual(THREAD, selector.current(force=True))
+            record['focused'] = False
+            record['ready'] = False
+            self.assertIsNone(selector.current(force=True))
+            self.assertEqual(THREAD, selector.display()['thread_id'])
+            foreground[0] = 'com.google.Chrome'
+            record.update(thread_id='new-cli-task', ready=True)
+            self.assertIsNone(selector.current(force=True))
+            self.assertEqual(THREAD, selector.display()['thread_id'])
+            foreground[0] = 'com.mitchellh.ghostty'
+            record['focused'] = True
+            self.assertEqual('new-cli-task', selector.current(force=True))
+            self.assertEqual('new-cli-task', selector.display()['thread_id'])
+
     def test_headless_foreground_reads_pid_again_after_app_switch(self):
         api = mock.Mock()
         front_pid = [101]

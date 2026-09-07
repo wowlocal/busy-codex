@@ -171,18 +171,26 @@ class Target:
         return self.status(force).get('thread_id')
 
     def display(self):
-        selected = self.status()
-        if selected.get('thread_id'):
-            return selected
-        # Keep usage visible while another app (or the lock screen) is active,
-        # but never grant dial control through this display-only fallback.
-        if self.last_display and self.last_display.get('kind') == 'cli':
-            records = self.sessions(self.home)
-            record = next((r for r in records if r['socket'] == self.last_display['socket']), None)
-            if record and record.get('ready'):
-                return {**record, 'kind': 'cli'}
-        thread_id = codex_focus.FOCUS.current()
-        return {'kind': 'desktop', 'thread_id': thread_id} if thread_id else {}
+        with self.lock:
+            selected = self.status()
+            if selected.get('thread_id'):
+                return selected
+            # Hiding an app or waiting for terminal focus reports must not
+            # replace the last selected task with another Desktop view/config.
+            # This fallback is display-only; current() still rejects controls.
+            if self.last_display:
+                if self.last_display.get('kind') == 'cli':
+                    records = self.sessions(self.home)
+                    record = next((r for r in records
+                                   if r['socket'] == self.last_display['socket']
+                                   and r['thread_id'] == self.last_display['thread_id']), None)
+                    if record and record.get('ready'):
+                        self.last_display = {**record, 'kind': 'cli'}
+                return dict(self.last_display)
+            thread_id = codex_focus.FOCUS.current()
+            if thread_id:
+                self.last_display = {'kind': 'desktop', 'thread_id': thread_id}
+            return dict(self.last_display or {})
 
 
 FOCUS = Target()

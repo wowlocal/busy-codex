@@ -28,6 +28,27 @@ class EffortTest(unittest.TestCase):
         self.assertEqual('low', update['collaborationMode']['settings']['reasoning_effort'])
         self.assertEqual(original, state)
 
+    def test_hidden_task_retains_confirmed_label_and_speed_without_controls(self):
+        control = effort.Controller(lambda: None, lambda: None, allowed=lambda: False)
+        control.thread_id = 'selected'
+        control.on_change({'type': 'snapshot', 'revision': 1, 'conversationState': self.state()})
+        control.thread_id, control.state, control.connected = None, {}, False
+        store = daemon.Store()
+        store.report('codex', 'selected', {'state': 'WORKING', 'label': 'Old low',
+                                         'control_thread_id': 'selected'})
+        with mock.patch.object(daemon, 'STORE', store), \
+             mock.patch.object(daemon, 'EFFORT_CONTROLLER', control):
+            snapshot = daemon.status_snapshot()
+        self.assertEqual('Test high', snapshot['label'])
+        self.assertEqual(['fast'], snapshot['badges'])
+        self.assertFalse(control.rotate(1))
+        self.assertFalse(control.toggle_fast())
+        self.assertFalse(control.status()['connected'])
+        store.report('codex', 'selected', {'control_thread_id': 'unseen'})
+        with mock.patch.object(daemon, 'STORE', store), \
+             mock.patch.object(daemon, 'EFFORT_CONTROLLER', control):
+            self.assertEqual('Old low', daemon.status_snapshot()['label'])
+
     def test_catalog_is_model_specific_and_ordered(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, 'models_cache.json').write_text(json.dumps({'models': [

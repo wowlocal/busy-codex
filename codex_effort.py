@@ -226,6 +226,7 @@ class Controller:
         self.wake = threading.Event()
         self.thread_id = None
         self.state = {}
+        self.display_settings = {}
         self.revision = None
         self.pending = 0
         self.pending_fast = deque()
@@ -247,7 +248,7 @@ class Controller:
         target = info['thread_id'] if 'thread_id' in info else self.target()
         return target, info, (target, info.get('kind'), info.get('socket'))
 
-    def status(self):
+    def status(self, display_thread_id=None):
         with self.lock:
             model, effort = model_effort(self.state)
             return {'enabled': True, 'connected': self.connected, 'thread_id': self.thread_id,
@@ -255,6 +256,7 @@ class Controller:
                     'model': model, 'effort': effort, 'error': self.error,
                     'service_tier': codex_fast.current_tier(self.state),
                     'fast': codex_fast.is_fast(self.state),
+                    'display': dict(self.display_settings.get(display_thread_id or self.thread_id, {})),
                     'direction': self.direction,
                     'confirmation_ms': self.confirmation_ms,
                     'display_ms': self.display_ms,
@@ -300,6 +302,18 @@ class Controller:
         with self.lock:
             self.state, self.revision = apply_change(self.state, self.revision, change)
             self.connected = True
+            model, effort = model_effort(self.state)
+            if self.thread_id and model and effort:
+                # Keep confirmed labels/speed visible after Cmd-H or focus loss.
+                # This bounded cache is never used to authorize a settings write.
+                self.display_settings.pop(self.thread_id, None)
+                self.display_settings[self.thread_id] = {
+                    'model': model, 'effort': effort,
+                    'service_tier': codex_fast.current_tier(self.state),
+                    'fast': codex_fast.is_fast(self.state),
+                }
+                if len(self.display_settings) > 16:
+                    self.display_settings.pop(next(iter(self.display_settings)))
         self.changed()
 
     def run(self, stop):
