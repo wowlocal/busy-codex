@@ -1,645 +1,160 @@
 # BUSY Codex
 
-Turn a [BUSY Bar](https://busy.app/) into a status display and effort dial for
-Codex Desktop and our native-control Codex CLI fork. Follow the foreground
-task, see weekly quota remaining and progress toward reset, and change effort
-with confirmed settings updates and native animations on the 72×16 display.
+**Your Codex session, on a [BUSY Bar](https://busy.app/).**
 
-The project also supports [Claude Code](https://claude.com/claude-code) and
-other tools through its reporting API. See [Codex integration](#codex-effort-dial-desktop-and-cli)
-and the [extension guide](docs/EXTENDING.md).
+See what your agent is doing and how much weekly allowance is left. Turn the
+dial to change reasoning effort. Press **START** to toggle Fast mode — with
+animations that get more intense as effort rises.
 
-## Standalone app and gallery package
+![BUSY Codex: effort and Fast mode animations on the 72×16 display](gallery/busy-codex/preview.gif)
 
-Build the complete app folder, then run it in the foreground:
+[Quick start](#quick-start) · [Controls](#controls) · [Compatibility](#compatibility) ·
+[App gallery](https://maxswinkels.github.io/busybar-apps/) · [Documentation](#documentation)
 
-```sh
-python3 scripts/build_gallery.py --output /tmp/busy-codex-gallery/busy-codex
-python3 /tmp/busy-codex-gallery/busy-codex/app.py
-```
+## Controls
 
-The launcher uploads its own animation assets, starts the display and Codex
-adapter, and stops both when closed. It creates no login items and does not
-restart exited workers. Use one instance to own the dial. USB is the default;
-`--host 192.168.1.50` selects Wi-Fi and `--no-effort` enables read-only use.
+| Control | What happens |
+| --- | --- |
+| **Turn the dial clockwise** | Increase reasoning effort by one supported level. |
+| **Turn the dial counterclockwise** | Decrease effort. The lowest and highest levels do not wrap. |
+| **Press the large START button** | Toggle Fast mode. Holding the button does not repeat the toggle. |
 
-Try the synthetic animation demo without Codex or account data:
+The controls follow the **foreground app**: the open task in Codex Desktop,
+or the focused terminal running our Codex CLI fork. Switch tasks and the
+controls follow you. When the target is ambiguous, writes pause.
 
-```sh
-python3 run_app.py --host 127.0.0.1:8080 --demo
-```
+Changes apply to subsequent turns and preserve the current model and Plan
+mode. They leave a running answer alone and do not change global defaults.
+The label appears after Codex confirms the setting.
 
-See [gallery packaging and compatibility](gallery/busy-codex/README.md) and
-[pixel scenes and preview tools](docs/PIXEL_UI.md). The standalone app uses
-its own canvas and loopback port 18765; the installed services retain their
-existing canvas and port 8765.
+**Effort has a different feel at each level:** calm flows at lower settings,
+blue currents at high, a violet helix at xhigh, gold shockwaves at max and
+plasma with sparks at ultra. Only levels supported by the selected model are
+offered. Fast ignites a gold warp; standard speed settles into blue rings.
 
-[中文文档 / Chinese docs](README.zh-CN.md)
+The 12-pixel bold lettering and effects play natively at 25 fps, then fade back
+to the dashboard. See the [effort comparison](docs/img/effort-levels.gif) and
+[Fast / standard animation pair](docs/img/fast-modes.gif).
 
-**Avatar style** — a faithful pixel Clawd acts out the session state:
-
-![Avatar style](docs/img/avatar-working.png)
-
-**Minimal style** — everything visible at once:
-
-![Minimal style](docs/img/working.png)
-
-```
-############################    1px per-pixel animated ring (.anim, 25 fps)
-#  Fable 5 max      [##----] #  model + effort · progress toward weekly reset
-#  W [########---] A  WORK   #  weekly quota · Astra rollout · state word
-############################
-```
-
-## What it shows
+## On the display
 
 | Element | Meaning |
 | --- | --- |
-| **Ring animation** | Session state, played natively by the firmware's own `.anim` decoder (same one as the built-in *keep out* theme): rainbow marquee = WORKING, purple wave = THINKING, green breathing = COMPLETE, orange pulse = WAIT (+ status LED), red blink = ERROR/FAILED, dim gray = IDLE |
-| **Model + effort** | e.g. `Fable 5 max`, colored with Claude Code's own theme palette per `/effort` level (`inactive` gray / `permission` blue / `warning` yellow / `fastMode` orange / `effortUltra` purple) |
-| **Reset progress** | Small top-right bar fills as the seven-day window approaches its reset; green → yellow → orange → red |
-| **Plan usage** | Large `W` bar shows weekly quota remaining; it shrinks and changes from green to yellow/orange/red as capacity runs low |
-| **Astra rollout** | Tiny pixel `A` beside the `W` bar: gray waiting, amber hidden, green available, red stale/error; availability starts a fast rainbow celebration around the display |
-| **State word** | `THINK / WORK / WAIT / ERR / FAIL / DONE / IDLE` |
+| **Model + effort** | The selected session's current model and reasoning level. |
+| **Large W bar** | Weekly allowance **remaining**. It shrinks as usage increases. |
+| **Small upper bar** | Time elapsed toward the account's next weekly reset. |
+| **Animated border + state** | Thinking, working, waiting, done, error or idle. Fast uses a gold working border. |
 
-![Ring only](docs/img/ring-only.png)
+Weekly usage comes from the signed-in Codex account and refreshes every minute,
+including while the task is idle. Reset progress follows the account's actual
+quota window. It is neither calendar-week progress nor context usage. Missing
+or expired data shows **?**, never an invented full allowance.
 
-### GPT-6 Astra rollout indicator
+## Quick start
 
-With the personal `astra-watch` Codex plugin installed, the main agent screen
-reads its non-secret state from `~/.local/state/astra-watch/state.json`. A 3x5
-pixel `A` fits between the weekly quota gauge and the state word without taking
-space from the model label. When Astra becomes selectable, the `A` turns green
-and the normal agent contour becomes a fast rainbow celebration with five
-white-hot orbiting sparks.
+You need **Python 3.9+**, a BUSY Bar connected over USB or Wi-Fi, and Codex
+signed in with your ChatGPT account. Foreground Desktop and terminal control
+currently runs on **macOS**. The live app uses only Python's standard library;
+there are no pip dependencies to install.
 
-Override the state path with `BUSYBAR_ASTRA_STATE`.
-`BUSYBAR_ASTRA_STALE_S` controls when an unrefreshed result turns red (default:
-1800 seconds). If the watcher is not installed, the indicator remains
-transparent and the existing display is unchanged.
+Clone this repository and build the complete app folder:
 
-### AI provider outage overlay
-
-An optional network-only monitor polls the open-source
-[AIWatch](https://github.com/bentleypark/aiwatch) public API. It groups related
-surfaces into seven providers: OpenAI (API, ChatGPT, Codex), Anthropic (API,
-claude.ai, Claude Code), Gemini, OpenRouter, DeepSeek, Mistral and Perplexity.
-
-X.com is monitored separately through the open-source
-[isUpMap](https://github.com/Jaironlanda/isupmap) API. It combines a direct
-availability check with a community-report surge signal, the closest open-source
-equivalent to Downdetector in this setup.
-
-Google.com is checked directly through Google's lightweight
-`/generate_204` connectivity endpoint. Two consecutive failures are required
-before a red `GOOGLE / DOWN / WEB` alert appears, avoiding one-off timeout
-flicker.
-
-While everything is operational the overlay owns no pixels, so the agent
-dashboard stays visible. A degraded or down provider takes over with a separate
-priority-80 canvas, an amber/red animated contour, provider name, affected
-surface and position in the rotation. Incidents appear first; Anthropic, X.com
-and Google.com are always appended to an active rotation and shown with a green
-`OK` state when healthy. xAI/Grok and GitHub Copilot are deliberately excluded.
-Items rotate every four seconds; stale or unavailable monitoring data is never
-presented as an outage. No Codex logs, browser automation, API key or persistent
-status file is used.
-
-The physical controls work while the overlay is visible: turn the encoder for
-the previous/next service, press `START` for next, or press `OK` to refresh all
-sources and return to the first item. Manual selection pauses auto-rotation for
-one four-second card interval. `BACK` remains the firmware's system-level exit
-key. Input comes directly from the device's local status WebSocket.
-
-Enable it in `env.sh`:
-
-```bash
-export BUSYBAR_AI_STATUS=1
-# Optional: BUSYBAR_AI_STATUS_POLL_S=60
-# Optional: BUSYBAR_AI_STATUS_URL=https://.../api/v1/status
-# Optional: BUSYBAR_X_STATUS_URL=https://.../api/status
-# Optional: BUSYBAR_GOOGLE_STATUS_URL=https://www.google.com/generate_204
+```sh
+git clone https://github.com/wowlocal/busy-codex.git
+cd busy-codex
+python3 scripts/build_gallery.py --output "$HOME/.local/share/busy-codex"
+python3 "$HOME/.local/share/busy-codex/app.py"
 ```
 
-## How it works
+The launcher uploads its animations and starts the display and Codex adapter.
+Keep it running; **Ctrl-C stops both workers** and releases the display. It does
+not create login items or restart exited workers. Run one BUSY Codex instance
+at a time so it owns the dial and START button.
 
-```
-statusline command --.                                    USB (10.0.4.20)
-                     +--> daemon.py :8765 ---------------> BUSY Bar
-settings.json hooks -'      |  session store               /api/display/draw
-                            +--> GET /status               (pre-uploaded .anim
-                                 (future on-device app)     assets, native fps)
-```
+For Wi-Fi, pass the Bar's address. If its API requires authentication, set
+`BUSYBAR_TOKEN` in your environment.
 
-- Claude Code's **statusline** JSON (model, effort, context window, rate
-  limits) and **hook events** (UserPromptSubmit, Pre/PostToolUse, Stop,
-  PermissionRequest, …) are forwarded to a tiny local daemon.
-- The daemon keeps per-session state (multiple Claude sessions supported,
-  even across several computers — the one you last talked to wins) and
-  renders to the device over the HTTP API. Ring animations are **pre-rendered `.anim` files** generated by
-  `animgen.py` — a from-scratch Python encoder for the firmware's
-  undocumented `bicycle0` animation format — uploaded once and played by
-  the device itself, so the animation is perfectly smooth with near-zero
-  traffic.
-- The live runtime uses Python's standard library. Optional PNG/GIF export
-  uses Pillow as a development dependency.
-
-**Not just Claude:** the daemon core is provider-agnostic. Codex, Cursor,
-CI jobs — anything that can run one curl — can drive the display through
-`POST /v1/report`. Claude-specific semantics (effort colors, 5h/7d plan
-windows) live in a built-in adapter. Wi-Fi and cloud transports are
-selectable via `BUSYBAR_TRANSPORT`; a BLE transport is designed. See
-**[docs/EXTENDING.md](docs/EXTENDING.md)**.
-
-## Install
-
-Requirements: macOS, Linux or Windows; Python 3.9+; a BUSY Bar
-connected over USB (firmware 1.1.x); Claude Code with statusline +
-hooks support. On Windows use `py`/`python` instead of `python3` —
-every entry point resolves the interpreter via `sys.executable`, and
-the glue layer (`report.py`, `adapters/codex_notify.py`) is pure Python
-with no bash/nohup/pgrep dependencies. (`report.sh` remains for
-existing POSIX installs.) Verified on a real Windows machine as a hub
-client (hooks + statusline forwarded over Wi-Fi, see below); running
-the daemon itself on Windows with the Bar on its USB port is untested —
-issues welcome.
-
-```bash
-git clone https://github.com/Alpharius-003/busybar-claude-status
-cd busybar-claude-status
-
-python3 animgen.py anims/                 # generate ring animations
-python3 - <<'PY'                          # upload them to the device
-import animgen, urllib.request
-opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-for app, animations in (
-    ("claude_status", animgen.ANIMS),
-    ("ai_provider_status", animgen.AI_STATUS_ANIMS),
-    ("astra_watch_ai", animgen.ASTRA_STATUS_ANIMS),
-):
-    for f, (gen, w, h, fps) in animations.items():
-        frames = gen()
-        blob = animgen.encode_anim(frames, fps=fps, w=w, h=h)
-        opener.open(urllib.request.Request(
-            f"http://10.0.4.20/api/assets/upload?application_name={app}&file={f}",
-            data=blob, method="POST"), timeout=15)
-        print("uploaded", app, f)
-PY
-
-python3 setup_claude.py install           # wire into Claude Code (backs up first)
-python3 install_astra_app.py              # optional Astra Watch entry in APPS
+```sh
+python3 "$HOME/.local/share/busy-codex/app.py" --host 192.168.1.50
 ```
 
-Start a Claude Code session — the daemon auto-spawns on the first
-statusline refresh and the display appears. `setup_claude.py uninstall`
-reverses everything.
+Useful launch options:
 
-## Codex weekly usage
-
-Weekly usage comes from Codex's documented
-[`account/rateLimits/read`](https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt)
-endpoint, refreshed every 60 seconds by the background adapter even when the
-selected task is idle. It reads the account's `codex` bucket from
-`rateLimitsByLimitId`; task history and other models' quota buckets cannot
-replace it. Windows are identified by duration, so the week can be either
-`primary` or `secondary` and a lone five-hour window never becomes a week.
-
-The large **W** bar is capacity remaining (`100 − usedPercent`). The small upper
-bar is elapsed time toward the API's actual weekly reset, not calendar-week
-progress or task context usage. A reset triggers an early account refresh.
-Expired data never implies 100% remaining: both fills clear and **?** appears
-until fresh data arrives. On a temporary read failure, the last confirmed
-snapshot remains usable for at most three minutes and never past its reset.
-
-The installed Codex executable handles authentication through the existing
-ChatGPT login. Each poll only initializes an app-server and reads account
-limits, then closes it. It does not start a task, call a model, or consume a
-reset credit. The Desktop-bundled executable is preferred on macOS, then
-`codex` on PATH; `BUSYBAR_CODEX_BIN` can override its location. Set
-`BUSYBAR_CODEX_LIMIT_ID` only to intentionally display another account bucket.
-
-`GET /status` exposes `quota_status` (source, bucket, freshness, timestamp and
-error), each window's `observed_at`/`valid_until`, and `week_progress_pct`.
-For a fresh one-off diagnostic, run `python3 adapters/codex_status.py --once -v`.
-Notify hooks use `--no-usage-refresh` so frequent turns do not multiply account
-requests or overwrite the background reader's usage data.
-
-## Codex effort dial (Desktop and CLI)
-
-Press the large **START** button to toggle **Fast mode** for the same foreground
-task. One press makes one change; holding the button does not repeat it. Fast
-ignites a golden warp with a lightning symbol; standard speed cools into blue
-rings. The bold `FAST` / `NORMAL` label appears after Codex confirms the setting,
-then fades back to the dashboard. The working ring follows the confirmed speed.
-Both controls preserve the current model and Plan mode and change next-turn
-settings without writing global defaults. Fast uses the selected model's
-advertised service tier; turning it off explicitly selects standard routing,
-including on models whose default tier is Fast. Fast consumes plan usage faster,
-as it does when enabled inside Codex.
-
-![Fast ignition and standard-speed cooldown](docs/img/fast-modes.gif)
-
-
-The encoder follows the foreground app: the task open in Codex Desktop's
-primary window, or the focused terminal running a connected Codex CLI.
-Clockwise increases effort, counterclockwise decreases it; the ends clamp.
-Supported levels come from that model's Codex catalog (the CLI's live
-`model/list` response, or Desktop's local cache). The first detent wakes the
-controller immediately. Quick turns are combined during a settings request,
-with at most one confirmed update per 40 ms; continued rotation never postpones
-the first update. Only confirmed settings changes trigger the animation.
-The new effort applies to subsequent turns; it does not interrupt a running
-answer or send a message. Hand-drawn, 12-pixel lettering uses clean two-pixel
-stems, open counters, and steady white ink. It becomes fully visible in 80 ms;
-successive detents replace the label immediately without replaying the entrance.
-The overlay dissolves back to the quota screen after 1.8 seconds.
-High has blue racing currents, xhigh a violet double helix, max gold shockwaves,
-and ultra fast plasma with icy sparks. Lower levels use calmer slate, teal,
-green and cyan flows. The gradient stays continuous behind and around the text.
-Effort feedback is sent to the display before lower-priority dashboard updates.
-`GET /hub` reports `codex_effort.confirmation_ms` and `display_ms`, measured from
-the first queued detent to native confirmation and successful device submission.
-These timings exclude the matrix's animation frame interval.
-
-The controller retains each model's last confirmed catalog entry for up to five
-minutes if the shared cache becomes unreadable or temporarily loses that model.
-A fresh valid entry takes precedence immediately. Catalog errors preserve the
-Desktop connection and log the exact model and available entries for diagnosis.
-
-![Effort levels: high, xhigh, max and ultra](docs/img/effort-levels.gif)
-
-Generate and upload the native 25 fps wave, glint and sliding-label animations:
-
-```bash
-python3 install_effort_anims.py
-```
-
-Control is enabled by default. Run the daemon and Codex adapter on the same Mac
-as Codex Desktop. Selection follows the app's `thread_stream_view_activity_changed`
-lifecycle events in `~/Library/Logs/com.openai.codex`, which record task-view
-mounts and unmounts. Background model output and auto-review sessions cannot
-select a task. The adapter follows the same selection and refreshes on tab
-changes even when the selected task is idle.
-
-CLI control uses the fork's **native TUI control endpoint**. The TUI itself
-publishes its selected task, focus, model, effective effort, service tier and supported controls.
-BUSY Bar sends an explicit settings request and follows its native confirmation by
-request ID. Normal startup and resume use Codex's own backend directly.
-
-Use the [native control fork](https://github.com/wowlocal/codex/tree/codex/native-tui-control)
-with `CODEX_TUI_CONTROL` support and the `fast/set` endpoint. Restart existing
-CLI sessions after updating the fork to load the new endpoint. Our launcher enables it;
-the raw binary can opt in explicitly:
-
-```bash
-CODEX_TUI_CONTROL=1 codex --yolo
-CODEX_TUI_CONTROL=1 codex resume <session-id> --yolo
-```
-
-On macOS, run the display services independently through launchd:
-
-```bash
-python3 native_services.py install
-```
-
-The services start at login and register as background processes, so Python
-icons do not appear in the Dock. Launchd does not repeatedly restart an exited
-service. Existing notification hooks can still start the services on Codex use.
-
-When migrating an installation that used the old command shim, restore the
-original command with `python3 install_codex_cli.py uninstall`, then point it
-at the updated fork launcher. Already running CLI processes retain their loaded
-binary and adopt native control on their next launch. The legacy bridge remains
-only for compatibility with older running sessions; new native launches do not
-use its Python PTY/WebSocket proxy or terminal-title parsing. Custom terminal
-titles are unrestricted. `CODEX_TUI_CONTROL=0` disables the native endpoint.
-
-The endpoint lives in a private `$CODEX_HOME/tui-control/<instance>` directory.
-It exposes settings/status only. Request outcomes distinguish pending, applied,
-rejected and unconfirmed; a dropped connection is recovered by reading the
-original request ID, without repeating the write. Native changes preserve Plan
-mode and unrelated settings and apply to subsequent turns. Session changes do
-not rewrite global defaults.
-
-On macOS, foreground application identity chooses Desktop versus a terminal.
-The native TUI supplies terminal focus. Ghostty, Terminal, iTerm2, WezTerm,
-Kitty, Alacritty and Warp are recognized; terminal tabs and multiplexers must
-forward focus reports. Multiple focused sessions pause the dial until selection
-is unambiguous. Switching to another app disables writes while keeping usage
-visible. No Accessibility or Screen Recording permission is required.
-
-See [native control design and upstream discussions](docs/NATIVE_CLI_CONTROL_PROPOSAL.md)
-and [integration research](docs/CODEX_INTEGRATION_RESEARCH.md). To run the isolated
-native TUI check without submitting model prompts:
-
-```bash
-python3 tests/check_codex_cli_native_live.py /path/to/native/codex-or-launcher
-```
-
-For an optional fixed task, set this in `env.sh` before starting both processes
-(manual launches should first source the file):
-
-```bash
-export BUSYBAR_CODEX_THREAD_ID="<existing local task UUID>"
-```
-
-`BUSYBAR_CODEX_THREAD_ID` pins the display/adapter and dial to that task. Without
-it, selection is automatic. Home/Settings pages, a closed Codex app, or missing
-view events disable writes. Keep tasks in one primary Codex window: if multiple
-primary windows have visible tasks, control pauses because focus can change
-without a log event. No UI automation, Accessibility permission, app patching,
-or new Codex conversation is needed.
-
-The integration uses the installed Desktop's private, versioned IPC protocol
-(snapshot v11, settings request v1), verified against the September 2026 app.
-It preserves the model, collaboration mode and other settings. It fails closed
-when the app disconnects, ownership or protocol changes, or the model catalog
-does not contain the current effort and no recent confirmed entry is available.
-Menus, Astra Watch and provider outage
-overlays retain their controls. CLI instances without the native endpoint or a
-legacy bridge are not controlled.
-`GET /hub` includes `codex_target` (Desktop/CLI selection), `codex_focus`
-(Desktop view evidence) and `codex_effort` connection,
-target, model, effort and errors. `BUSYBAR_CODEX_LOG_DIR` overrides the Desktop
-log directory. `BUSYBAR_CODEX_IPC` overrides the socket path; `BUSYBAR_CODEX_EFFORT=0` disables
-the controller without disabling the quota display.
-
-`codex_target.foreground_bundle` shows the app observed by the background
-process. `device_input.last_start` records START presses and any blocking reason.
-`codex_effort.fast` and `service_tier` expose the current confirmed speed.
-`device_input.last_encoder` records the latest dial event, whether it
-was accepted and why it was ignored. macOS foreground polling works without an
-AppKit event loop, including after locking/unlocking or changing apps.
-
-## Display styles
-
-Two looks, one codebase — pick with `BUSYBAR_STYLE` (persist it in an
-`env.sh` next to `daemon.py`, e.g. `export BUSYBAR_STYLE=avatar`):
-
-- **`minimal`** (default) — the layout above: state word + weekly gauges always
-  visible.
-- **`avatar`** — a pixel companion (a 1:1 recreation of the Claude Code
-  terminal mascot) acts out the state on the right: typing at a laptop
-  while WORKING (with blinks), light bulb while THINKING, coffee break
-  when DONE, X-eyes on ERROR, zzz when idle — plus a vertical context
-  gauge. The bottom-left slot shows the state as a word and swaps to
-  quotas once the work is done.
-
-For Codex `fast` mode, the separate badge is replaced by a yellow animated
-working contour so it cannot collide with text on the 72×16 display.
-
-Styles are a runtime option, not separate branches — every release
-contains both.
-
-## Display modes
-
-Set `BUSYBAR_RENDER_MODE` (or edit `RENDER_MODE` in `daemon.py`):
-
-- **`auto`** (default) — display whenever an agent is active; after 10
-  minutes of idle the screen is handed back to the device and returns on
-  the next activity (`BUSYBAR_IDLE_CLEAR_S` tunes this; `0` = keep the
-  display forever).
-- **`theme`** — manual, on the device: the display only shows while
-  **"claude" is the currently selected BUSY/CUSTOM theme**. Install the
-  theme with `python3 install_theme.py` — a breathing claude-orange ring
-  with the companion typing in the middle; it appears in the device's
-  theme picker (also the screen during a claude-theme focus session):
-
-  ![Claude theme](docs/img/claude-theme.png)
-
-  Picking it toggles the display on, picking another theme toggles it
-  off. (In `auto` mode the theme is unrelated to the status display —
-  it's just a theme.) `python3 claude_card.py install` binds the physical
-  CUSTOM key to it (backs up your current card; `restore` undoes).
-- **`off`** — data bridge only (`GET /status` on `127.0.0.1:8765` and the
-  USB interface for the future on-device app).
-
-## Several computers, one Bar
-
-Claude Code on a Mac *and* a Windows PC (any number of sessions each),
-one display that follows you. The computer the Bar is plugged into runs
-the daemon as the **hub**; every other computer runs nothing — its hooks
-and statusline are forwarded to the hub over the LAN.
-
-```bash
-# on the computer with the Bar (the hub)
-python3 setup_claude.py install --lan
-
-# on every other computer (Windows: py setup_claude.py ...)
-python3 setup_claude.py install --hub http://<hub-name>.local:8765 --tag "#00A4EF"
-```
-
-- `--lan` makes the hub listen on `0.0.0.0:8765` (`BUSYBAR_LISTEN`).
-  `--hub` writes `BUSYBAR_HUB` on the client: `report.py` posts straight
-  to the hub, capped at 1.2 s per hook and backed off for 20 s when the
-  hub is unreachable, so an asleep hub never slows Claude Code down.
-  Both persist in `env.sh`; a running hub daemon is restarted for you.
-- `<hub-name>.local` is the hub's Bonjour/mDNS name (macOS: System
-  Settings → General → Sharing → *Local hostname*; Windows 10 1703+
-  resolves `.local` natively). If it doesn't resolve on your network,
-  use the hub's IP and give it a DHCP reservation in your router.
-- `--tag` marks that computer's sessions on the display: a `#RRGGBB`
-  color draws a 2×5 flag in the free columns left of the model name
-  (costs no text space); one or two letters (`--tag W`) go after the
-  model name instead, shortening it if needed (`Fabl 5 max W`).
-- `--token SECRET` (same value on hub and clients) makes the hub reject
-  LAN reports without it; loopback never needs one. Off by default — the
-  hub is meant for a home network. If the hub runs a firewall, allow
-  inbound TCP 8765 for Python.
-- Codex on a client works the same way: its adapter posts to the hub.
-
-**Which session is shown?** The display follows attention, not chatter.
-Among the sessions doing something, the one you last talked to wins —
-a prompt you submit, a permission request, or a task starting from idle
-pulls the display; tool calls and statusline refreshes never do. When
-that session goes idle, whatever is still running surfaces; when
-everything is idle, the last one you talked to stays. `GET /status`
-includes `host` and `host_tag`; `GET /health` lists every session with
-its `focus_ts`.
-
-### When the hub sleeps: a standby
-
-The hub is usually a laptop. Close its lid and the Bar goes dark — unless
-a second computer is a **standby**: it runs its own daemon, mirrors its
-sessions to the hub while the hub is up, and paints the Bar itself, over
-the Bar's own Wi-Fi, the moment the hub is gone. Nothing else changes:
-whenever the hub is awake, the hub decides what is shown.
-
-Once, on the computer with the Bar (over USB): put the Bar on your Wi-Fi
-(BUSY app → Wi-Fi; `curl http://10.0.4.20/api/wifi/status` shows its LAN
-address) and give its Wi-Fi API a key:
-
-```bash
-curl -X POST 'http://10.0.4.20/api/access?mode=key&key=1234567890'
-```
-
-Then on the standby (Windows: `py setup_claude.py ...`):
-
-```bash
-python3 setup_claude.py install --hub http://<hub-name>.local:8765 --standby \
-    --transport wifi --device <Bar LAN IP> --device-token 1234567890 --tag "#00A4EF"
-```
-
-- The standby takes over after three probes in a row fail (about 10 s) —
-  counted only while the Bar itself still answers, so a standby waking
-  from its *own* sleep never paints over a live hub — or when the hub
-  reports it cannot reach the Bar (unplugged). It hands back the moment
-  the hub answers again: resync first, then the hub repaints, then the
-  standby stops. `GET http://127.0.0.1:8765/standby` on it shows what it
-  thinks; `GET /hub` on either daemon shows role, style and device health.
-- Sessions are mirrored as ages, not timestamps (the two clocks may
-  disagree by seconds), `state` only when it changed (so even a hub
-  running an older daemon arbitrates as if the hooks had reached it
-  directly; the lease and `/redraw` need the current one), under a 90 s
-  lease refreshed every 30 s — a standby that vanishes takes its sessions
-  with it. A hub restart, or a hub that forgot a session while asleep, is
-  noticed and resynced within seconds.
-- Keep `--style` the same on both computers (the standby logs a warning
-  if not) and give the Bar and the hub DHCP reservations. The key grants
-  full control of the Bar to anyone on your Wi-Fi: use 10 digits, keep
-  the Bar on a trusted network, rotate it over USB if a computer is lost.
-  `--no-standby` turns a standby back into a plain forwarder.
-- `install` ends with two probes — the hub, and the Bar with the key just
-  written — so a wrong key or a closed port is caught right there.
-
-## On-device apps (firmware ≥ 1.2.0)
-
-- `device_app/` + `install_app.py` provide **Claude Status**, an alternative
-  JS renderer for the agent dashboard.
-- `astra_device_app/` + `install_astra_app.py` provide the standalone
-  **Astra Watch** entry in APPS. It requests a fresh non-inference catalog
-  check when opened. With `BUSYBAR_X_PULSE=1`, it also runs broad, focused
-  access-report, hands-on, and media searches plus an official OpenAI/employee search.
-  The default
-  `BUSYBAR_X_PULSE_BACKEND=bird` uses a local browser-cookie session through
-  the pinned Bird CLI and does not call the paid X API. Set
-  `BUSYBAR_X_PULSE_SSH_HOST=local` to run Bird beside the daemon, or an SSH
-  host to keep the session on another Mac. `xurl` remains available only via
-  the explicit `BUSYBAR_X_PULSE_BACKEND=xurl`, with your own
-  `BUSYBAR_X_PULSE_APP` and `BUSYBAR_X_PULSE_USERNAME`; there is no automatic paid
-  fallback.
-  The bar color still comes only from the newest applicable `@OpenAI` wording.
-  Its fill and the `SEED` / `EARLY` / `GROWING` / `BROAD` / `WIDE` label use a
-  coarse evidence stage. ChatGPT, API, early-enterprise and ambiguous reports
-  are classified separately and never enter the Codex denominator. `R1/W1`
-  means one ready and one waiting Codex reporter; once the persistent waiting
-  panel observes transitions, `+3/12H` means three `WAITING -> READY` reports
-  in 12 hours. The stage is monotone unless an explicit rollback path is added;
-  an X complaint spike cannot move it backwards. X-only, unvalidated evidence
-  is capped at `EARLY` and quality `Q:L`; only an official all-users statement
-  can currently grant `WIDE`.
-
-  Each Bird poll merges broad discovery, focused access-report, hands-on, and
-  media searches, then deduplicates stable IDs and near-copied
-  launch posts locally. The focused retrieval prevents X's relevance ranking
-  from hiding short first-person access reports. `/hub` also exposes 6h/12h
-  ready and waiting counts, newest-ready age, fixed-panel size, signal activity,
-  classification yield, copy suppression, plan coverage, and auditable stage
-  promotion reasons. The explicit `xurl` backend instead uses a saved
-  `since_id`. Both retain a 30-day observation and fixed-panel history in
-  `BUSYBAR_X_PULSE_STATE` (default
-  `~/.local/state/astra-watch/x-pulse.json`). Raw post text and author IDs are
-  not persisted. The reporter share and its Wilson interval remain available
-  in `/hub` as diagnostics explicitly scoped to classified reporters, not as a
-  population estimate. X is checked every six hours by default. Bird uses
-  undocumented web GraphQL and may be rate-limited or broken by X changes;
-  use it read-only with a non-critical account. When `xurl` is selected,
-  OAuth tokens remain on the SSH host and reads are pay-per-use. `READY` gets the
-  high-energy rainbow animation. The display refreshes every 2 seconds;
-  press `OK` while it is open to refresh both the catalog and X pulse.
-
-  Set `BUSYBAR_X_PULSE_LLM=1` to send only new, high-priority ambiguous posts
-  through one cached Codex batch. The default `gpt-5.6-luna` at low effort can
-  be replaced with `BUSYBAR_X_PULSE_LLM_MODEL=gpt-5.6-terra`; there is no
-  automatic second-model fallback. The classifier runs ephemerally with user
-  config, rules, shell, browser, apps, computer use, image generation, and
-  multi-agent tools disabled. A strict output schema and a 0.95 acceptance
-  gate are enforced; errors fall back to deterministic rules. Reviewed text
-  hashes are cached, while raw posts remain unpersisted. A real Luna batch has
-  roughly 10k tokens of Codex harness overhead, so batching/caching matter.
-  When LLM assistance has reviewed the current window, the bottom row becomes
-  `AI<n> COLD/WARM/HOT/FIRE · Rn/Wn`, where `<n>` is the number of recent
-  candidates reviewed by the model. Temperature is an ordinal 12-hour momentum
-  signal; the top bar remains the separate rollout-evidence stage, colored by
-  the current temperature.
-
-In `auto` render mode the daemon observes the hardware selector through the
-local status WebSocket. It releases its agent canvas while APPS or SETTINGS is
-selected, then restores it on return to CUSTOM/BUSY, so native menus and the
-Astra app are never covered by keepalive redraws.
-
-## Firmware field notes (1.1.1)
-
-Things discovered the hard way, verified on-device:
-
-- `rectangle` elements have an **undocumented `border_width`** defaulting
-  to a 1px *white* border — thin rectangles render pure white unless you
-  send `border_width: 0`.
-- `/api/screen` returns the framebuffer **base64-encoded in BGR order**
-  (`screenshot.py` handles it).
-- The `small` font is **proportional** (~3.8px digits); measure on-device
-  before doing pixel layout.
-- The `.anim` format (`bicycle0`): BGRA8888/BGR888/Gray4 + RLE +
-  inter-frame collapsing + named sections. `animgen.py` implements a
-  compatible encoder with a decode round-trip check.
-- Writing `manifest.json` or binary data into
-  `/ext/user_assets/<app>/appmeta/` **crashes and reboots** the firmware
-  (half-finished JS-app scanner). Theme dirs under
-  `/ext/apps_assets/busy/themes/` are safe.
-- While a focus session is **running**, all canvas drawing is rejected —
-  even at priority 100 (docs say sessions sit at 90; not on 1.1.1).
-- Sessions can be controlled via `PUT /api/busy/snapshot`
-  (`card_id`, `is_paused`, `snapshot_timestamp_ms` required; `type:
-  NOT_STARTED` ends one). The two physical mode keys map to
-  `/api/busy/profiles/{busy|custom}`.
-- `storage` API: write = POST raw body, remove = **DELETE**, rename takes
-  `path` + `new_path`.
-- A running JS app keeps `scripts/main.js` open. The Astra installer compacts
-  the source below the firmware request limit and stages `main.js.next` before
-  replacing the entry file; exit/restart the app before installing an update.
-- Re-uploading an `.anim` that is currently being played fails with
-  "Failed to open file for writing" — clear the element (freeing the file
-  handle) before uploading.
-
-## Repo layout
-
-| File | Purpose |
+| Option | Purpose |
 | --- | --- |
-| `daemon.py` | session store + `/status` + device renderer (stdlib only) |
-| `busybar_http.py` | Device HTTP transport and proxy-free USB/Wi-Fi connections |
-| `busybar_input.py` | Shared buffered WebSocket/protobuf input with ordered events and reconnect backoff |
-| `display_scene.py` | Batches changed display groups and caches only acknowledged updates |
-| `pixel_ui.py`, `pixel_fonts.py` | Reusable pixel canvas, bitmap typography and slide/fade transitions |
-| `fast_animation.py` | Native Fast ignition and standard-speed cooldown scenes |
-| `codex_fast.py` | Model-specific service-tier selection for the current task |
-| `effort_animation.py` | Effort scenes shared by native playback and offline previews |
-| `preview_effort.py` | Deterministic PNG/GIF/contact-sheet export; optional Pillow dependency |
-| `x_pulse.py` | bounded X Recent Search over SSH + explicit-report classifier/cache |
-| `ai_status.py` | network-only AIWatch monitor + high-priority provider outage overlay |
-| `report.py` / `report.sh` | statusline/hook forwarder; auto-spawns the daemon, or forwards to a LAN hub when `BUSYBAR_HUB` is set (unless `BUSYBAR_STANDBY`) (`.py` = cross-platform, `.sh` = POSIX legacy) |
-| `setup_claude.py` | wire into / out of `~/.claude` (with backups); `--lan` / `--hub` / `--standby` / `--tag` / `--token` / `--style` for several computers |
-| `animgen.py` | `.anim` (bicycle0) encoder + agent-state and AI-alert contours |
-| `claude_card.py` | bind the CUSTOM key to the claude theme (and restore) |
-| `install_app.py`, `device_app/` | optional on-device Claude Status JS renderer |
-| `install_astra_app.py`, `astra_device_app/` | standalone Astra rollout monitor in the BUSY Bar APPS menu |
-| `screenshot.py` | grab either the front or back display as an upscaled PNG |
-| `docs/EXTENDING.md` | reporting protocol v1, adapter guide, transport guide (incl. BLE design) |
-| `adapters/codex_status.py` | Codex adapter (model/effort/speed, context %, quotas — all derived, no name tables) |
-| `codex_usage.py` | Account-level quota polling with bounded freshness and reset-aware refreshes |
-| `codex_cli_native.py` | Client for the fork's native TUI status and confirmed effort API |
-| `native_services.py` | Independent macOS display daemon and adapter services |
-| `codex_cli.py` | Legacy bridge retained for compatibility; native launches bypass it |
-| `install_codex_cli.py` | Reversible automatic connection for ordinary interactive `codex` commands |
-| `codex_target.py` | Foreground Desktop/terminal selection shared by the adapter and dial |
-| `adapters/install_codex_autostart.py` | hook the adapter into Codex's `notify` so it auto-starts on use |
-| `install_theme.py` | install the on-device "claude" theme (ring + typing companion) |
+| `--no-effort` | Show status and limits without changing effort or Fast mode. |
+| `--no-upload` | Reuse this version's animation assets after the first successful launch. |
+| `--port 18766` | Change the local report port from its default, 18765. |
+| `--demo` | Play synthetic effort and Fast animations on the Bar without a Codex account. |
 
-## Disclaimers
+To update, stop the app, pull the repository, rerun the build command and launch
+again. The builder refreshes its own output folder. A complete app folder from
+the [gallery](https://maxswinkels.github.io/busybar-apps/) can also be run directly
+with `python3 app.py`.
 
-Not affiliated with BUSY, OpenAI or Anthropic. Tested on BUSY Bar firmware
-1.1.1 with Claude Code 2.x: the daemon on macOS (Bar on USB), plus a
-Windows machine as a hub client over Wi-Fi. The standby role was
-verified on the Mac with a second daemon (`daemon.py --port 8766`)
-driving the Bar over Wi-Fi while the hub was frozen (`SIGSTOP`) — not yet
-from a real Windows standby. The firmware quirks above may change in any
-update. MIT licensed.
+## Compatibility
+
+| Codex installation | Account limits | Effort dial | START → Fast |
+| --- | :---: | :---: | :---: |
+| **Codex Desktop on macOS** | Yes | Yes | Yes, when the model supports Fast |
+| **Stock Codex CLI** | Yes | — | — |
+| **Our native-control CLI fork** | Yes | Yes | Yes, with `fast/set` support |
+
+For CLI controls, use the
+[native-control fork](https://github.com/wowlocal/codex/tree/codex/native-tui-control).
+Its launcher enables the local control endpoint; with a raw binary, launch it
+with `CODEX_TUI_CONTROL=1 codex`. **Restart existing CLI sessions after updating.**
+The earlier `v0.153.4-fork.1-native-control` release supports effort only;
+START needs a build that includes `fast/set`.
+
+Desktop control uses a private local IPC interface, so compatibility can change
+with Desktop updates. CLI control uses the fork's native, confirmed settings
+API. Both require an unambiguous foreground target. See
+[setup and troubleshooting](docs/CODEX.md) for terminal focus, multiple windows
+and connection diagnostics.
+
+## Local integration
+
+Session state comes from local Codex metadata. Account limits are read through
+the installed Codex executable, using its existing login. No prompts are sent
+and no model inference or usage-reset credit is needed for monitoring.
+
+Fast mode has the same effect on plan usage as enabling it inside Codex.
+The app selects the model's advertised Fast tier and explicitly restores
+standard routing when you turn it off.
+
+Animation assets are uploaded once per launch and played by the device. The
+app sends state changes and keepalives during normal operation; the firmware
+renders the animation frames. No Accessibility or Screen Recording permission
+is needed for session controls.
+
+## Documentation
+
+| Guide | Contents |
+| --- | --- |
+| [Codex setup and troubleshooting](docs/CODEX.md) | Native CLI, optional macOS services, quota freshness and control diagnostics. |
+| [Gallery package](gallery/busy-codex/README.md) | Portable app folder, emulator preview and gallery checks. |
+| [Pixel UI](docs/PIXEL_UI.md) | Animation scenes, bitmap type and PNG/GIF exports. |
+| [Extension guide](docs/EXTENDING.md) | Reporting API, adapters and device transports. |
+| [Display configuration](docs/CONFIGURATION.md) | Optional avatar style, themes and extra monitors. |
+| [Claude Code](docs/CLAUDE_CODE.md) | The original hook integration and shared displays across computers. |
+| [Firmware notes](docs/FIRMWARE.md) | Hardware observations and native animation format details. |
+
+The [Chinese documentation](README.zh-CN.md) covers the original Claude Code integration.
+
+## Development
+
+```sh
+python3 -m unittest discover -s tests
+```
+
+The optional [preview exporter](docs/PIXEL_UI.md) needs Pillow; the app itself
+does not. The [gallery guide](gallery/busy-codex/README.md#preview-and-conformance)
+explains how to capture synthetic previews and run device API checks.
+
+## Credits and license
+
+Built on [Alpharius-003/busybar-claude-status](https://github.com/Alpharius-003/busybar-claude-status),
+with Codex session controls, account usage monitoring and native pixel effects.
+Released under the [MIT license](LICENSE). Independent community project;
+not affiliated with OpenAI, BUSY or Anthropic.

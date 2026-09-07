@@ -7,9 +7,10 @@
 
 Download the complete app folder, not this entrypoint alone. Python 3.9+;
 standard library only. macOS foreground targeting follows Codex Desktop or
-the active CLI terminal. CLI effort control requires the native-control fork:
-https://github.com/wowlocal/codex/releases/tag/v0.153.4-fork.1-native-control
-Stock CLI remains usable for account limits, but cannot accept dial changes.
+the active CLI terminal. CLI controls require the native-control fork:
+https://github.com/wowlocal/codex/tree/codex/native-tui-control
+Fast needs a build with fast/set; restart CLI sessions after updating.
+Stock CLI remains usable for account limits, but cannot accept control changes.
 
 Reads local Codex session metadata and invokes the installed `codex app-server`
 only to read account limits. It does not send prompts, edit Codex config,

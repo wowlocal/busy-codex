@@ -1,4 +1,6 @@
-# Extending busybar-claude-status
+# Extending BUSY Codex
+
+[Back to BUSY Codex](../README.md) · [Firmware notes](FIRMWARE.md)
 
 Two extension axes: **more agents** (Codex, Cursor, anything) via the
 reporting protocol, and **more links to the device** via transports.

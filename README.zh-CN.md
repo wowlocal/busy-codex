@@ -1,9 +1,12 @@
 # busybar-claude-status（中文）
 
+本文介绍原版 Claude Code 集成。BUSY Codex 的安装、effort 旋钮和 START 快速模式
+请参阅 [BUSY Codex README](README.md)。
+
 把 Claude Code 终端 StatusBar 的信息（Model、effort、context window、plan 用量）
 和当前会话状态实时显示到 Busy Bar 的前置 LED 屏（72×16）上。
 
-[English docs](README.md) ｜ 支持 macOS / Linux / **Windows**（Windows 用
+[English docs](docs/CLAUDE_CODE.md) ｜ 支持 macOS / Linux / **Windows**（Windows 用
 `py setup_claude.py install`，胶水层为纯 Python 无 bash 依赖；硬件实测：
 macOS 直连 Bar，Windows 作为枢纽客户端经 Wi-Fi 转发；备用枢纽在 Mac 上用第二个 daemon 冻结枢纽验证，尚未在真实 Windows 上跑过）｜ 安装：`python3 setup_claude.py install`
 （自动备份并接入 `~/.claude` 的 statusline 与 hooks，`uninstall` 可完整还原；
