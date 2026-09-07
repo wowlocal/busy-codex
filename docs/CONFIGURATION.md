@@ -13,9 +13,12 @@ The standalone app uploads its own assets automatically. For a source daemon
 or service installation, run this from the checkout to upload the base rings
 and optional monitor assets. Stop the renderer first: firmware cannot replace
 an animation while it is playing. The transport uses the same device and token
-configuration as the daemon.
+configuration as the daemon. If you use `env.sh`, load it into the shell first.
 
 ```sh
+if [ -f ./env.sh ]; then
+    . ./env.sh
+fi
 python3 - <<'PY'
 import animgen
 import daemon
