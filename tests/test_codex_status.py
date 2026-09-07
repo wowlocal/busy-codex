@@ -72,6 +72,27 @@ class RolloutSnapshotTest(unittest.TestCase):
             self.assertEqual(usage['quotas'], codex_status.probe(usage)['quotas'])
             self.assertNotIn('quotas', codex_status.probe())
 
+    def test_new_desktop_task_does_not_wait_for_history_to_enable_controls(self):
+        thread = '11111111-2222-3333-4444-555555555555'
+        with mock.patch.object(codex_status, 'newest_rollout', return_value=None), \
+             mock.patch.object(codex_status, 'config_defaults', return_value={'model': 'gpt-test'}):
+            payload = codex_status.probe(selection={'kind': 'desktop', 'thread_id': thread})
+        store = daemon.Store()
+        store.report(payload['source'], payload['session_id'], payload)
+        with mock.patch.object(daemon, 'STORE', store), \
+             mock.patch.object(daemon, 'effort_target', return_value=thread), \
+             mock.patch.object(daemon, 'device_canvas_allowed', return_value=False):
+            self.assertEqual('Device mode owns the dial', daemon.effort_input_block_reason())
+        self.assertEqual(thread, payload['control_thread_id'])
+
+    def test_drafts_and_missing_desktop_targets_do_not_enable_thread_controls(self):
+        with mock.patch.object(codex_status, 'newest_rollout', return_value=None), \
+             mock.patch.object(codex_status, 'config_defaults', return_value={'model': 'gpt-test'}):
+            for thread in (None, '', 'client-new-thread:11111111-2222-3333-4444-555555555555'):
+                with self.subTest(thread=thread):
+                    payload = codex_status.probe(selection={'kind': 'desktop', 'thread_id': thread})
+                    self.assertIsNone(payload['control_thread_id'])
+
     def test_new_account_usage_is_reported_without_rollout_activity(self):
         values = iter((38, 45))
         monitor = codex_usage.Monitor(fetch=lambda _: {'rateLimits': {'primary': {

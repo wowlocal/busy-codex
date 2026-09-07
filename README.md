@@ -113,6 +113,8 @@ with `CODEX_TUI_CONTROL=1 codex`. **Restart existing CLI sessions after updating
 The earlier `v0.153.4-fork.1-native-control` release supports effort only;
 START needs a build that includes `fast/set`.
 
+In a new Desktop chat, send the first message before using the controls: the
+app does not expose unsent drafts through its session-control interface.
 Desktop control uses a private local IPC interface, so compatibility can change
 with Desktop updates. CLI control uses the fork's native, confirmed settings
 API. Both require an unambiguous foreground target. See

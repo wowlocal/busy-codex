@@ -14,6 +14,12 @@ output cannot select a task. The controller changes settings through the app's
 private, versioned IPC interface (snapshot v11, settings request v1, verified
 against the September 2026 app).
 
+Controls become available when Desktop creates a real task and publishes its
+native settings snapshot; no history file is required. An unsent new-chat draft
+(`client-new-thread:…`) is not exposed by this IPC interface. Send the first
+message before using the dial or START in a new Desktop chat. BUSY Codex does
+not change global model defaults to work around that limitation.
+
 Keep tasks in **one primary Codex window**. Multiple visible primary windows,
 Home/Settings pages, missing view events or a disconnected app pause writes.
 The app does not require Accessibility, Screen Recording, UI automation or

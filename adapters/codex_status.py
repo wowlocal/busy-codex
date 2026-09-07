@@ -117,15 +117,6 @@ def newest_rollout(selection=None) -> pathlib.Path | None:
     return None
 
 
-def rollout_metadata(path) -> dict:
-    try:
-        with path.open() as stream:
-            event = json.loads(stream.readline())
-        return event.get("payload", {}) if event.get("type") == "session_meta" else {}
-    except (OSError, ValueError):
-        return {}
-
-
 def _apply_event(snapshot: dict, event: dict) -> None:
     """Merge one structured rollout event into the latest known snapshot."""
     payload = event.get("payload")
@@ -234,12 +225,17 @@ def probe(usage=None, selection=None) -> dict | None:
     if effort:
         label += f" {effort}"
 
-    meta = rollout_metadata(rollout) if rollout else {}
+    # A newly created Desktop task may not have a rollout yet. Its native
+    # owner and settings snapshot are verified by the controller; history is
+    # display data, not evidence that a task can accept settings.
+    control_id = None
+    if target.get('kind') == 'desktop' and re.fullmatch(codex_focus.UUID, target.get('thread_id') or ''):
+        control_id = target['thread_id']
+    elif target.get('kind') == 'cli' and target.get('ready'):
+        control_id = target['thread_id']
     return {
         "source": "codex", "session_id": session_id, "state": state,
-        "control_thread_id": (target['thread_id'] if target.get('kind') == 'cli' and target.get('ready')
-                              else meta.get("id") if meta.get("originator") == "Codex Desktop"
-                              and meta.get("source") == "vscode" else None),
+        "control_thread_id": control_id,
         "label": label, "context_pct": context_pct,
         "badges": badges, "ttl_s": 600,
         **(usage or {}),
