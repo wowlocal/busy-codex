@@ -49,6 +49,7 @@ import codex_effort
 import codex_focus
 import codex_target
 import effort_animation
+import fast_animation
 from display_scene import DrawCache
 from busybar_http import HttpTransport, local_opener
 from busybar_input import InputStream, input_stream_url
@@ -429,6 +430,8 @@ DEVICE_MODE: str | None = None
 DEVICE_INPUT_CONNECTED = False
 DEVICE_INPUT_ERROR = ""
 LAST_ENCODER = {}
+LAST_START = {}
+START_DOWN = False
 EFFORT_CONTROLLER = None
 
 
@@ -1114,8 +1117,8 @@ def device_canvas_allowed() -> bool:
 
 
 def handle_device_input_event(event: tuple) -> bool:
-    """Track the mode selector and route OK to an active Astra Watch app."""
-    global DEVICE_MODE, LAST_ENCODER
+    """Route START to Fast, the dial to effort, and OK to Astra Watch."""
+    global DEVICE_MODE, LAST_ENCODER, LAST_START, START_DOWN
     if not event:
         return False
     if event[0] == "encoder":
@@ -1133,6 +1136,27 @@ def handle_device_input_event(event: tuple) -> bool:
             log(f'Codex dial ignored: {reason}')
         return handled
     if event[0] == "button":
+        if len(event) >= 3 and event[1] == 2:  # START; PRESS=0, RELEASE=1
+            with DEVICE_INPUT_LOCK:
+                if event[2] == 1:
+                    START_DOWN = False
+                    return False
+                if event[2] != 0 or START_DOWN:
+                    return False
+                START_DOWN = True
+            handled = False
+            reason = ''
+            if EFFORT_CONTROLLER and effort_input_allowed():
+                handled = EFFORT_CONTROLLER.toggle_fast()
+                if not handled:
+                    reason = EFFORT_CONTROLLER.status().get('error') or 'Codex settings connection is not ready'
+            else:
+                reason = effort_input_block_reason() if EFFORT_CONTROLLER else 'Codex controls are disabled'
+            with DEVICE_INPUT_LOCK:
+                LAST_START = {'at': time.time(), 'handled': bool(handled), 'reason': reason}
+            if not handled:
+                log(f'Codex START ignored: {reason}')
+            return handled
         if event[1:3] == (0, 0) and astra_app_status()["active"]:
             request_astra_refresh()
             request_x_pulse_refresh(force=True)
@@ -1155,10 +1179,12 @@ def device_input_loop(input_url: str, stop: threading.Event,
                       source_address: str | None = None):
     """Observe hardware events through the shared buffered input stream."""
     def update_state(connected, error):
-        global DEVICE_INPUT_CONNECTED, DEVICE_INPUT_ERROR
+        global DEVICE_INPUT_CONNECTED, DEVICE_INPUT_ERROR, START_DOWN
         with DEVICE_INPUT_LOCK:
             DEVICE_INPUT_CONNECTED = connected
             DEVICE_INPUT_ERROR = error
+            if not connected:
+                START_DOWN = False
 
     InputStream(input_url, handle_device_input_event,
                 source_address=source_address, on_state=update_state,
@@ -1277,8 +1303,11 @@ def effort_feedback_elements(feedback):
 
 def effort_overlay_elements(feedback, direction=1, entering=True):
     error = feedback == "ERR"
-    path = (effort_animation.filename(feedback.lower(), direction, entering)
-            if feedback and not error else "effort_clear.anim")
+    if feedback in ('FAST', 'NORMAL'):
+        path = fast_animation.filename(feedback == 'FAST', entering)
+    else:
+        path = (effort_animation.filename(feedback.lower(), direction, entering)
+                if feedback and not error else "effort_clear.anim")
     return [
         {"id": "effort_transition", "type": "animation", "display": "front",
          "x": 0, "y": 0, "path": path, "loop": False, "timeout": 4, "z_index": 100},
@@ -1359,6 +1388,10 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                     transport.clear(APP_NAME)
                 status = status_snapshot()
                 control = EFFORT_CONTROLLER.status() if EFFORT_CONTROLLER else {}
+                if (control.get("connected") and control.get("thread_id") == sess.get("control_thread_id")
+                        and control.get("fast") is not None):
+                    badges = [badge for badge in status.get("badges") or [] if badge not in ("fast", "priority")]
+                    status["badges"] = badges + (["fast"] if control["fast"] else [])
                 feedback = (control.get("feedback")
                             if control.get("thread_id") == sess.get("control_thread_id") else None)
                 # Detent feedback goes out before quota text/ring refreshes.
@@ -1450,6 +1483,7 @@ class Handler(BaseHTTPRequestHandler):
                     "connected": DEVICE_INPUT_CONNECTED,
                     "error": DEVICE_INPUT_ERROR,
                     "last_encoder": LAST_ENCODER or None,
+                    "last_start": LAST_START or None,
                 },
                 "codex_effort": (EFFORT_CONTROLLER.status() if EFFORT_CONTROLLER
                                  else {"enabled": False}),

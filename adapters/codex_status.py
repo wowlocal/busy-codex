@@ -223,6 +223,8 @@ def probe(usage=None) -> dict | None:
     if not model:
         return None
 
+    if tier == "priority":
+        tier = "fast"
     label = prettify_model(model)
     badges = None
     if tier and tier not in ("default", "standard"):

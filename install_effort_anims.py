@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Generate, verify and upload only the BUSY Codex effort animations."""
+"""Generate, verify and upload the BUSY Codex effort and Fast animations."""
 import argparse
 from pathlib import Path
 import urllib.request
 import animgen
 import effort_animation
+import fast_animation
 import daemon
 
 
@@ -22,6 +23,10 @@ def main():
             for entering in (True, False):
                 assets.append((effort_animation.filename(level, direction, entering),
                                effort_animation.frames(level, direction, entering=entering)))
+    for enabled in (True, False):
+        for entering in (True, False):
+            assets.append((fast_animation.filename(enabled, entering),
+                           fast_animation.frames(enabled, entering)))
     for name, frames in assets:
         blob = animgen.encode_anim(frames, fps=effort_animation.FPS)
         animgen.decode_check(blob, frames)

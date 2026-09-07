@@ -19,7 +19,7 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = (
     "daemon.py", "display_scene.py", "busybar_input.py", "busybar_http.py", "ai_status.py",
-    "codex_effort.py", "codex_focus.py", "codex_target.py", "codex_usage.py",
+    "codex_effort.py", "codex_fast.py", "fast_animation.py", "codex_focus.py", "codex_target.py", "codex_usage.py",
     "codex_cli_native.py", "codex_cli_client.py", "report.py",
     "adapters/codex_status.py", "effort_animation.py", "pixel_ui.py", "pixel_fonts.py",
 )
@@ -81,6 +81,7 @@ def main(argv=None):
     sys.path.insert(0, str(ROOT))
     import animgen
     import effort_animation
+    import fast_animation
 
     def asset(name, frames, fps, width=72, height=16):
         blob = animgen.encode_anim(frames, fps=fps, w=width, h=height)
@@ -100,6 +101,10 @@ def main(argv=None):
                 asset(effort_animation.filename(level, direction, entering),
                       effort_animation.frames(level, direction, entering=entering),
                       effort_animation.FPS)
+    for enabled in (True, False):
+        for entering in (True, False):
+            asset(fast_animation.filename(enabled, entering),
+                  fast_animation.frames(enabled, entering), fast_animation.FPS)
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True))
     provenance = {"repository": "https://github.com/wowlocal/busy-codex",

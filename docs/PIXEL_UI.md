@@ -13,6 +13,8 @@ an image does not require an attached BUSY Bar or an active Codex session.
   produce an explicit error. Glyphs have two-pixel stems and open counters.
 - `effort_animation.py`: effort-specific palettes and motion. `frame()` renders
   one frame; `frames()` generates the sequence used by `install_effort_anims.py`.
+- `fast_animation.py`: START ignition and deceleration scenes, sharing the same
+  native timing and bold pixel font.
 - `preview_effort.py`: optional PNG, contact sheet and GIF exports using Pillow.
 
 The renderer and PNG encoder use the Python standard library. Pillow is needed
@@ -70,3 +72,9 @@ visible immediately. This avoids replaying a slow entrance for every detent.
 
 Only draw a background plate when the design calls for one. Painting a continuous
 background before the glyph mask preserves the same gradient between letters.
+
+Preview the START-button pair with the same exporter:
+
+```sh
+python3 preview_effort.py --out /tmp/fast-preview --levels fast normal
+```

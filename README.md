@@ -226,6 +226,20 @@ requests or overwrite the background reader's usage data.
 
 ## Codex effort dial (Desktop and CLI)
 
+Press the large **START** button to toggle **Fast mode** for the same foreground
+task. One press makes one change; holding the button does not repeat it. Fast
+ignites a golden warp with a lightning symbol; standard speed cools into blue
+rings. The bold `FAST` / `NORMAL` label appears after Codex confirms the setting,
+then fades back to the dashboard. The working ring follows the confirmed speed.
+Both controls preserve the current model and Plan mode and change next-turn
+settings without writing global defaults. Fast uses the selected model's
+advertised service tier; turning it off explicitly selects standard routing,
+including on models whose default tier is Fast. Fast consumes plan usage faster,
+as it does when enabled inside Codex.
+
+![Fast ignition and standard-speed cooldown](docs/img/fast-modes.gif)
+
+
 The encoder follows the foreground app: the task open in Codex Desktop's
 primary window, or the focused terminal running a connected Codex CLI.
 Clockwise increases effort, counterclockwise decreases it; the ends clamp.
@@ -268,12 +282,13 @@ select a task. The adapter follows the same selection and refreshes on tab
 changes even when the selected task is idle.
 
 CLI control uses the fork's **native TUI control endpoint**. The TUI itself
-publishes its selected task, focus, model, effective effort and supported levels.
-BUSY Bar sends an explicit effort request and follows its native confirmation by
+publishes its selected task, focus, model, effective effort, service tier and supported controls.
+BUSY Bar sends an explicit settings request and follows its native confirmation by
 request ID. Normal startup and resume use Codex's own backend directly.
 
 Use the [native control fork](https://github.com/wowlocal/codex/tree/codex/native-tui-control)
-with `CODEX_TUI_CONTROL` support. Our fork launcher enables it;
+with `CODEX_TUI_CONTROL` support and the `fast/set` endpoint. Restart existing
+CLI sessions after updating the fork to load the new endpoint. Our launcher enables it;
 the raw binary can opt in explicitly:
 
 ```bash
@@ -350,7 +365,9 @@ log directory. `BUSYBAR_CODEX_IPC` overrides the socket path; `BUSYBAR_CODEX_EFF
 the controller without disabling the quota display.
 
 `codex_target.foreground_bundle` shows the app observed by the background
-process. `device_input.last_encoder` records the latest dial event, whether it
+process. `device_input.last_start` records START presses and any blocking reason.
+`codex_effort.fast` and `service_tier` expose the current confirmed speed.
+`device_input.last_encoder` records the latest dial event, whether it
 was accepted and why it was ignored. macOS foreground polling works without an
 AppKit event loop, including after locking/unlocking or changing apps.
 
@@ -593,6 +610,8 @@ Things discovered the hard way, verified on-device:
 | `busybar_input.py` | Shared buffered WebSocket/protobuf input with ordered events and reconnect backoff |
 | `display_scene.py` | Batches changed display groups and caches only acknowledged updates |
 | `pixel_ui.py`, `pixel_fonts.py` | Reusable pixel canvas, bitmap typography and slide/fade transitions |
+| `fast_animation.py` | Native Fast ignition and standard-speed cooldown scenes |
+| `codex_fast.py` | Model-specific service-tier selection for the current task |
 | `effort_animation.py` | Effort scenes shared by native playback and offline previews |
 | `preview_effort.py` | Deterministic PNG/GIF/contact-sheet export; optional Pillow dependency |
 | `x_pulse.py` | bounded X Recent Search over SSH + explicit-report classifier/cache |

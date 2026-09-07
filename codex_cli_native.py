@@ -35,19 +35,31 @@ class NativeCLIIPC(CLIIPC):
             self.revision += 1
             self.on_change({'type': 'snapshot', 'revision': self.revision,
                 'conversationState': {'latestThreadSettings': {
-                    'model': state['model'], 'effort': state['effort']}}})
+                    'model': state['model'], 'effort': state['effort'],
+                    **({key: state.get(key) for key in ('serviceTier', 'fastServiceTier')}
+                       if 'serviceTier' in state else {})}}})
         return {'result': state}
 
     def request(self, method, params, target=None):
         if method != 'thread-follower-update-thread-settings':
             raise ValueError('Unsupported native CLI operation')
-        effort = params['threadSettings']['effort']
+        settings = params['threadSettings']
+        if 'serviceTier' in settings:
+            tier = settings['serviceTier']
+            fast_tier = self.state.get('fastServiceTier')
+            if not fast_tier or tier not in (fast_tier, 'default'):
+                raise ValueError('Restart the updated native CLI with Fast mode support')
+            command = {'method': 'fast/set', 'enabled': tier == fast_tier}
+            key, expected = 'serviceTier', tier
+        else:
+            key, expected = 'effort', settings['effort']
+            command = {'method': 'effort/set', 'effort': expected}
         request_id = str(uuid.uuid4())
         instance, model = self.state['instanceId'], self.state['model']
         try:
-            result = self.raw_rpc({'method': 'effort/set', 'requestId': request_id,
+            result = self.raw_rpc({**command, 'requestId': request_id,
                 'expectedRevision': self.state['revision'],
-                'expectedThreadId': self.thread_id, 'effort': effort})
+                'expectedThreadId': self.thread_id})
         except OSError:
             # Recover the exact request result; never repeat a settings write.
             self.close()
@@ -60,14 +72,14 @@ class NativeCLIIPC(CLIIPC):
             time.sleep(.025)
             result = self.raw_rpc({'method': 'request/read', 'requestId': request_id})
         if result['status'] != 'applied':
-            raise ValueError((result.get('outcome') or {}).get('error') or 'Native effort confirmation is pending')
+            raise ValueError((result.get('outcome') or {}).get('error') or 'Native settings confirmation is pending')
         outcome = result['outcome']
-        if (outcome.get('threadId'), outcome.get('model'), outcome.get('effort')) != (self.thread_id, model, effort):
+        if (outcome.get('threadId'), outcome.get('model'), outcome.get(key)) != (self.thread_id, model, expected):
             raise ValueError('Native CLI confirmation does not match request')
         # Let the native TUI consume its confirmed event and refresh the widget.
         while time.monotonic() < deadline:
             self.receive()
-            if self.state['model'] == model and self.state['effort'] == effort:
+            if self.state['model'] == model and self.state.get(key) == expected:
                 return {'result': self.state}
             time.sleep(.025)
         raise ValueError('Native CLI display has not caught up to confirmed settings')

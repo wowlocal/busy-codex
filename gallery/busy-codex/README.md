@@ -4,6 +4,9 @@ Codex task state, current account limits and elapsed quota-window
 progress on a BUSY Bar. Turn the dial to change the reasoning effort of the
 foreground Codex Desktop task or supported CLI session. The display reflects
 the confirmed setting; each effort level has its own native animation.
+Press the large START button to toggle Fast mode: gold warp ignition for Fast,
+blue deceleration for standard speed. Holding it does not repeat the toggle.
+Fast uses more plan allowance, just like enabling it inside Codex.
 
 This is an independent community app, not an OpenAI or BUSY Bar product.
 
@@ -50,6 +53,9 @@ Session state is read from local Codex metadata. Account limits come from
 `account/rateLimits/read` through a short-lived local Codex app-server, refreshed
 once a minute. No model inference or prompt submission is performed. Missing
 or expired quota data remains unavailable instead of being shown as zero.
+
+Fast switching requires the fork’s `fast/set` endpoint; restart CLI sessions
+after updating. The controls preserve Plan mode and do not write global defaults.
 
 ## Preview and conformance
 

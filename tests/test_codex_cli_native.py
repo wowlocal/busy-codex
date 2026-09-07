@@ -33,7 +33,8 @@ class NativeClientTest(unittest.TestCase):
         self.write_received = threading.Event()
         self.state = {'protocolVersion': 1, 'instanceId': 'instance', 'threadId': THREAD,
             'model': 'test-model', 'effort': 'high', 'supportedEfforts': ['low','high','xhigh'],
-            'revision': 1, 'focused': True, 'ready': True}
+            'revision': 1, 'focused': True, 'ready': True,
+            'serviceTier': 'default', 'fastServiceTier': 'priority', 'collaborationMode': 'plan'}
         self.worker = threading.Thread(target=self.serve, daemon=True)
         self.worker.start()
         self.client = NativeCLIIPC(self.path, lambda _: None)
@@ -58,7 +59,7 @@ class NativeClientTest(unittest.TestCase):
                     value = json.loads(line)
                     if value['method'] == 'status/read':
                         result = self.state
-                    elif value['method'] == 'effort/set':
+                    elif value['method'] in ('effort/set', 'fast/set'):
                         self.writes.append(value)
                         self.write_received.set()
                         self.allow_write.wait(2)
@@ -66,9 +67,11 @@ class NativeClientTest(unittest.TestCase):
                             result = {'requestId': value['requestId'], 'status': 'rejected',
                                       'outcome': {'error': 'selection or settings changed'}}
                         else:
-                            self.state.update(effort=value['effort'], revision=self.state['revision'] + 1)
+                            key = 'effort' if value['method'] == 'effort/set' else 'serviceTier'
+                            setting = value['effort'] if key == 'effort' else ('priority' if value['enabled'] else 'default')
+                            self.state.update({key: setting, 'revision': self.state['revision'] + 1})
                             result = {'requestId': value['requestId'], 'status': 'applied', 'outcome': {
-                                'threadId': THREAD, 'model': 'test-model', 'effort': value['effort']}}
+                                'threadId': THREAD, 'model': 'test-model', key: setting}}
                         self.results[value['requestId']] = result
                         if self.drop_ack:
                             break
@@ -142,6 +145,46 @@ class NativeClientTest(unittest.TestCase):
                 time.sleep(.01)
             self.assertEqual('LOW', controller.status()['feedback'])
             self.assertEqual(['xhigh', 'low'], [write['effort'] for write in self.writes])
+
+    def test_fast_lost_ack_recovers_without_repeating_toggle(self):
+        self.drop_ack = True
+        self.client.request('thread-follower-update-thread-settings',
+                            {'threadSettings': {'serviceTier': 'priority'}})
+        self.assertEqual('priority', self.client.state['serviceTier'])
+        self.assertEqual(('high', 'plan'), (self.state['effort'], self.state['collaborationMode']))
+        self.assertEqual(1, len(self.writes))
+        self.assertEqual('fast/set', self.writes[0]['method'])
+        self.assertTrue(self.writes[0]['enabled'])
+
+    def test_fast_then_dial_then_fast_preserve_inputs_while_waiting_for_confirmation(self):
+        self.allow_write.clear()
+        with self.controller() as controller:
+            controller.toggle_fast()
+            self.assertTrue(self.write_received.wait(1))
+            self.assertIsNone(controller.status()['feedback'])
+            controller.rotate(1)
+            controller.toggle_fast()
+            self.allow_write.set()
+            deadline = time.monotonic() + 3
+            while controller.status()['feedback'] != 'NORMAL' and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertEqual('NORMAL', controller.status()['feedback'])
+            self.assertFalse(controller.status()['fast'])
+            self.assertEqual(['fast/set', 'effort/set', 'fast/set'], [w['method'] for w in self.writes])
+            self.assertEqual(('default', 'xhigh', 'plan'),
+                             (self.state['serviceTier'], self.state['effort'], self.state['collaborationMode']))
+
+    def test_old_native_cli_has_actionable_error_without_sending_write(self):
+        self.state.pop('serviceTier')
+        self.state.pop('fastServiceTier')
+        with self.controller() as controller:
+            controller.toggle_fast()
+            deadline = time.monotonic() + 2
+            while not controller.status()['error'] and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertIn('restart the updated native CLI', controller.status()['error'])
+            self.assertEqual('ERR', controller.status()['feedback'])
+            self.assertEqual([], self.writes)
 
     def test_discovery_uses_native_full_task_identity(self):
         home = Path(self.temp.name)

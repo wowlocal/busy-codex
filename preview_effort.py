@@ -14,6 +14,9 @@ import argparse
 from pathlib import Path
 
 import effort_animation as animation
+import fast_animation
+
+SCENES = (*animation.LEVELS, "fast", "normal")
 
 
 def export_preview(output: Path, levels: list[str], scale: int = 8,
@@ -27,7 +30,7 @@ def export_preview(output: Path, levels: list[str], scale: int = 8,
     """
     from PIL import Image
 
-    if not levels or any(level not in animation.LEVELS for level in levels):
+    if not levels or any(level not in SCENES for level in levels):
         raise ValueError('Choose at least one supported effort level')
     if scale < 1 or not 0 <= still_frame < animation.FRAMES:
         raise ValueError('Scale must be positive and still frame in range')
@@ -41,7 +44,8 @@ def export_preview(output: Path, levels: list[str], scale: int = 8,
     sheet_size = (width, len(levels) * height + (len(levels) - 1) * gap)
 
     def scene(level, index):
-        data = animation.frame(level, index, direction, entering)
+        data = (fast_animation.frame(level == "fast", index, entering)
+                if level in ("fast", "normal") else animation.frame(level, index, direction, entering))
         rgba = Image.frombytes('RGBA', (width, height), data, 'raw', 'BGRA')
         image = Image.new('RGB', rgba.size, 'black')
         image.paste(rgba, mask=rgba.getchannel('A'))
@@ -88,7 +92,7 @@ def export_preview(output: Path, levels: list[str], scale: int = 8,
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True, help='Output directory')
-    parser.add_argument('--levels', nargs='+', choices=animation.LEVELS,
+    parser.add_argument('--levels', nargs='+', choices=SCENES,
                         default=['high', 'xhigh', 'max', 'ultra'])
     parser.add_argument('--scale', type=int, default=8, help='Integer pixel scale')
     parser.add_argument('--direction', choices=('up', 'down'), default='up')

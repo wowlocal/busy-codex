@@ -114,10 +114,11 @@ def demo(args):
     skipped rather than collected in a queue.
     """
     import effort_animation
+    import fast_animation
     from pixel_ui import encode_png
 
     bar = Bar(args.host)
-    levels = ("high", "xhigh", "max", "ultra")
+    levels = ("high", "ultra", "fast", "normal")
     started = time.monotonic()
     deadline = started + (args.seconds or float("inf"))
     retry_delay = .25
@@ -129,7 +130,8 @@ def demo(args):
             level = "ultra" if args.test else levels[int(elapsed / effort_animation.DURATION_S) % len(levels)]
             phase = elapsed % effort_animation.DURATION_S
             frame_index = 18 if args.test else int(phase * effort_animation.FPS)
-            pixels = effort_animation.frame(level, frame_index, entering=False)
+            pixels = (fast_animation.frame(level == "fast", frame_index, entering=False)
+                      if level in ("fast", "normal") else effort_animation.frame(level, frame_index, entering=False))
             name = f"demo-{index % 4}.png"
             index += 1
             try:

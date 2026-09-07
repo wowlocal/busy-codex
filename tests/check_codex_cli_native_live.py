@@ -46,6 +46,17 @@ def check_dial(record, home):
             assert not status['error'], status['error']
             timings.append(status['confirmation_ms'])
         print('PASS: native dial confirmation latency (ms):', timings, flush=True)
+        before = controller.status()['effort']
+        for expected in (True, False):
+            revision = controller.status()['feedback_revision']
+            assert controller.toggle_fast()
+            wait_for(lambda: controller.status()['feedback_revision'] > revision,
+                     'START did not receive a confirmed Fast setting')
+            status = controller.status()
+            assert not status['error'], status['error']
+            assert status['fast'] is expected, status
+            assert status['effort'] == before, status
+            print('PASS: native START Fast', expected, status['confirmation_ms'], 'ms', flush=True)
     finally:
         stop.set()
         worker.join(2)
@@ -126,6 +137,15 @@ def check(binary):
             assert client.state['collaborationMode'] == 'plan'
             print('PASS: effort changes preserve Plan mode', flush=True)
 
+            config_before = (home / 'config.toml').read_bytes()
+            for tier in ('priority', 'default'):
+                client.request('thread-follower-update-thread-settings', {'threadSettings': {'serviceTier': tier}})
+                assert client.state['serviceTier'] == tier
+                assert client.state['collaborationMode'] == 'plan'
+                assert client.state['effort'] == 'high'
+                assert (home / 'config.toml').read_bytes() == config_before
+            print('PASS: Fast roundtrip preserves effort, Plan and config', flush=True)
+
             os.write(master, b'\x1b[O')
             def unfocused():
                 client.receive()
@@ -136,6 +156,12 @@ def check(binary):
                 raise AssertionError('Unfocused effort change was accepted')
             except ValueError as error:
                 assert 'focused' in str(error), error
+            try:
+                client.request('thread-follower-update-thread-settings', {'threadSettings': {'serviceTier': 'priority'}})
+                raise AssertionError('Unfocused Fast change was accepted')
+            except ValueError as error:
+                assert 'focused' in str(error), error
+            assert client.state['serviceTier'] == 'default'
             assert client.state['effort'] == 'high'
             print('PASS: native focus loss blocks mutation', flush=True)
             os.write(master, b'\x1b[I')
