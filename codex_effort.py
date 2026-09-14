@@ -480,6 +480,8 @@ class Controller:
                     elif fast_at is not None:
                         try:
                             settings, enabled = codex_fast.toggle_settings(state, self.home, self.kind)
+                        except codex_fast.FastUnavailable:
+                            raise
                         except (OSError, ValueError, KeyError, TypeError) as error:
                             raise CatalogError(str(error)) from error
                         requested = settings['serviceTier']
@@ -528,6 +530,17 @@ class Controller:
                             self.due = self.last_applied_at + STEP_INTERVAL_S
                         self.error = ''
                     self.logger(f'Codex settings: {target} -> {feedback}')
+                    self.changed()
+                except codex_fast.FastUnavailable as error:
+                    # Unsupported capability is normal; keep the subscription and
+                    # queued effort inputs, and never send a settings mutation.
+                    with self.lock:
+                        self.confirmation_ms = self.display_ms = None
+                        self.error = ''
+                        self.feedback = 'NO FAST'
+                        self.feedback_revision += 1
+                        self.feedback_until = time.monotonic() + 1.3
+                    self.logger(f'Codex Fast unavailable: thread={target} {error}')
                     self.changed()
                 except CatalogError as error:
                     # Keep the valid subscription and any newly queued dial steps.

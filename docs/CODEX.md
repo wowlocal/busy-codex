@@ -82,7 +82,9 @@ the selected model's catalog, not a fixed list. The controller keeps a confirmed
 Desktop catalog entry for up to five minutes if the shared cache becomes
 unreadable; a fresh valid entry always takes precedence.
 
-START toggles the model's advertised Fast service tier. Turning it off sends
+START toggles the model's advertised Fast service tier. If no Fast tier is
+available, the Bar shows a neutral `NO FAST` for 1.3 seconds without changing
+settings or disconnecting controls. Turning it off sends
 explicit standard routing, including for models whose default tier is Fast.
 Both controls preserve the current model and Plan mode, apply to subsequent
 turns and do not rewrite global defaults.

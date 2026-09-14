@@ -1367,11 +1367,11 @@ def effort_feedback_elements(feedback):
     return [{"id": "effort", "type": "text", "display": "front",
              "x": 36, "y": 8, "align": "center", "text": feedback,
              "font": "large", "color": "#EF5555FF" if feedback == "ERR"
-             else "#60BFFFFF", "timeout": TEXT_TIMEOUT_S}]
+             else "#8996A8FF" if feedback == "NO FAST" else "#60BFFFFF", "timeout": TEXT_TIMEOUT_S}]
 
 
 def effort_overlay_elements(feedback, direction=1, entering=True):
-    error = feedback == "ERR"
+    error = feedback in ("ERR", "NO FAST")
     if feedback in ('FAST', 'NORMAL'):
         path = fast_animation.filename(feedback == 'FAST', entering)
     else:
@@ -1382,7 +1382,7 @@ def effort_overlay_elements(feedback, direction=1, entering=True):
          "x": 0, "y": 0, "path": path, "loop": False, "timeout": 4, "z_index": 100},
         {**_rect("effort_error_bg", 0, 0, 72, 16, "#000000FF" if error else "#00000000"),
          "z_index": 101, "timeout": 4},
-        {**effort_feedback_elements("ERR" if error else " ")[0],
+        {**effort_feedback_elements(feedback if error else " ")[0],
          "id": "effort_error_text", "z_index": 102, "timeout": 4},
     ]
 
@@ -1565,11 +1565,11 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                                if feedback else None)
                 if overlay_key != last_overlay_key:
                     elapsed = time.monotonic() - overlay_drawn_at
-                    finishing = (not feedback and last_overlay_key and last_overlay_key[1] != "ERR"
+                    finishing = (not feedback and last_overlay_key and last_overlay_key[1] not in ("ERR", "NO FAST")
                                  and last_overlay_key[0] == control.get("thread_id")
                                  and elapsed < effort_animation.DURATION_S)
                     if not finishing:
-                        entering = not (last_overlay_key and last_overlay_key[1] != "ERR"
+                        entering = not (last_overlay_key and last_overlay_key[1] not in ("ERR", "NO FAST")
                                         and last_overlay_key[0] == control.get("thread_id")
                                         and elapsed < (effort_animation.FRAMES - effort_animation.FADE_FRAMES)
                                         / effort_animation.FPS)

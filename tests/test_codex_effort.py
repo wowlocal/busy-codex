@@ -292,6 +292,10 @@ class AnimationTest(unittest.TestCase):
     def test_native_overlay_is_above_dashboard_and_ids_keep_types(self):
         normal = daemon.effort_overlay_elements('ULTRA')
         error = daemon.effort_overlay_elements('ERR')
+        unavailable = daemon.effort_overlay_elements('NO FAST')
+        self.assertEqual('effort_clear.anim', unavailable[0]['path'])
+        self.assertEqual('NO FAST', unavailable[-1]['text'])
+        self.assertEqual('#8996A8FF', unavailable[-1]['color'])
         cleared = daemon.effort_overlay_elements(None)
         self.assertTrue(all(element['z_index'] >= 100 for element in normal))
         types = [(element['id'], element['type']) for element in normal]

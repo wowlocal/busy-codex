@@ -246,6 +246,24 @@ class NativeClientTest(unittest.TestCase):
             self.assertEqual(('default', 'xhigh', 'plan'),
                              (self.state['serviceTier'], self.state['effort'], self.state['collaborationMode']))
 
+    def test_unsupported_fast_keeps_connection_and_effort_control(self):
+        self.state['fastServiceTier'] = None
+        with self.controller() as controller:
+            controller.toggle_fast()
+            deadline = time.monotonic() + 2
+            while controller.status()['feedback'] != 'NO FAST' and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertEqual('NO FAST', controller.status()['feedback'])
+            self.assertEqual('', controller.status()['error'])
+            self.assertTrue(controller.status()['connected'])
+            self.assertEqual([], self.writes)
+            controller.rotate(1)
+            deadline = time.monotonic() + 2
+            while controller.status()['effort'] != 'xhigh' and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertEqual('xhigh', controller.status()['effort'])
+            self.assertEqual(['effort/set'], [w['method'] for w in self.writes])
+
     def test_old_native_cli_has_actionable_error_without_sending_write(self):
         self.state.pop('serviceTier')
         self.state.pop('fastServiceTier')

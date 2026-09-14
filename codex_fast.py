@@ -4,6 +4,10 @@ import json
 from pathlib import Path
 
 
+class FastUnavailable(ValueError):
+    """The selected model/account does not advertise a Fast tier."""
+
+
 def current_tier(state):
     return (state.get('latestThreadSettings') or {}).get('serviceTier')
 
@@ -33,7 +37,7 @@ def toggle_settings(state, home, kind):
                           if str(tier.get('name', '')).strip().lower() in ('fast', 'priority')
                           or tier.get('id') in ('priority', 'fast')), None)
     if not fast_tier:
-        raise ValueError('Fast mode is not advertised for this model or account')
+        raise FastUnavailable('Fast mode is not advertised for this model or account')
     enabled = current not in ('fast', 'priority', fast_tier)
     # `default` explicitly disables tier routing, even on Fast-by-default models.
     update = {'serviceTier': fast_tier if enabled else 'default'}
