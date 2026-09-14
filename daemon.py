@@ -50,6 +50,7 @@ import codex_focus
 import codex_target
 import effort_animation
 import fast_animation
+import model_animation
 from display_scene import DrawCache
 from busybar_http import HttpTransport, local_opener
 from busybar_input import InputStream, input_stream_url
@@ -1139,7 +1140,10 @@ def handle_device_input_event(event: tuple) -> bool:
         if EFFORT_CONTROLLER and effort_input_allowed():
             handled = EFFORT_CONTROLLER.rotate(event[1])
             if not handled:
-                reason = EFFORT_CONTROLLER.status().get('error') or 'Codex settings connection is not ready'
+                control = EFFORT_CONTROLLER.status()
+                reason = ('Model change is awaiting confirmation'
+                          if (control.get('model_card') or {}).get('phase') == 'saving'
+                          else control.get('error') or 'Codex settings connection is not ready')
         else:
             reason = effort_input_block_reason() if EFFORT_CONTROLLER else 'Effort controller is disabled'
         with DEVICE_INPUT_LOCK:
@@ -1163,7 +1167,10 @@ def handle_device_input_event(event: tuple) -> bool:
             if EFFORT_CONTROLLER and effort_input_allowed():
                 handled = EFFORT_CONTROLLER.toggle_fast()
                 if not handled:
-                    reason = EFFORT_CONTROLLER.status().get('error') or 'Codex settings connection is not ready'
+                    control = EFFORT_CONTROLLER.status()
+                    reason = ('Close the model picker before toggling Fast'
+                              if control.get('model_menu') or (control.get('model_card') or {}).get('phase') == 'saving'
+                              else control.get('error') or 'Codex settings connection is not ready')
             else:
                 reason = effort_input_block_reason() if EFFORT_CONTROLLER else 'Codex controls are disabled'
             with DEVICE_INPUT_LOCK:
@@ -1183,7 +1190,9 @@ def handle_device_input_event(event: tuple) -> bool:
             handled = bool(not reason and EFFORT_CONTROLLER.crown())
             if not handled and not reason:
                 control = EFFORT_CONTROLLER.status()
-                reason = control.get('error') or ('CLI model selection requires an updated CLI process'
+                reason = control.get('error') or ('Model change is awaiting confirmation'
+                         if (control.get('model_card') or {}).get('phase') == 'saving'
+                         else 'CLI model selection requires an updated CLI process'
                          if control.get('kind') == 'cli' else 'Model catalog or settings connection is not ready')
             with DEVICE_INPUT_LOCK:
                 LAST_CROWN = {'at': time.time(), 'handled': handled, 'reason': reason}
@@ -1356,20 +1365,75 @@ def effort_overlay_elements(feedback, direction=1, entering=True):
     ]
 
 
-def model_menu_elements(menu):
-    from adapters.codex_status import prettify_model
-    name = prettify_model(menu['model']) if menu else ' '
-    while est_width(name) > 66:
-        name = name[:-1]
-    hint = f"{menu['index'] + 1}/{menu['count']} CLICK OK" if menu else ' '
-    return [
-        {**_rect('model_menu_bg', 0, 0, 72, 16, '#091122FF' if menu else '#00000000'),
-         'z_index': 110, 'timeout': 2},
-        {**_text('model_menu_name', 3, 0, 'top_left', name, '#BFA0FFFF'),
+def model_name_pages(menu):
+    name = model_animation.label(menu['model'], menu.get('name'))
+    pages, part = [], ''
+    for letter in name:
+        if est_width(part + letter) > 52:
+            pages.append(part)
+            part = ''
+        part += letter
+    return pages + [part or 'MODEL']
+
+
+def model_menu_elements(menu, now=None):
+    """Dynamic card content; its native background has a separate keepalive."""
+    now = time.monotonic() if now is None else now
+    key = model_animation.profile_key(menu['model']) if menu else 'neutral'
+    profile = model_animation.PROFILES[key]
+    phase = menu.get('phase', 'browse') if menu else ''
+    pages = model_name_pages(menu) if menu else [' ']
+    age = max(0, now - menu.get('changed_at', now)) if menu else 0
+    name = pages[int(age / 1.5) % len(pages)]
+    if phase == 'saving':
+        hint = 'SAVING' + '.' * (int(age * 2) % 3)
+    elif phase == 'confirmed':
+        hint = 'SET ' + menu.get('effort', '').upper()
+    elif menu:
+        hint = f"{menu['index'] + 1}/{menu['count']} " + ('ACTIVE' if menu.get('active') else 'CLICK')
+    else:
+        hint = ' '
+    # Very large catalogs still retain the action; position lives in diagnostics.
+    if est_width(hint) > 52:
+        hint = 'ACTIVE' if menu and menu.get('active') else 'CLICK'
+    elements = [
+        {**_text('model_menu_name', 19, 0, 'top_left', name, '#F3F7FFFF'),
          'z_index': 111, 'timeout': 2},
-        {**_text('model_menu_hint', 3, 8, 'top_left', hint, '#60BFFFFF'),
+        {**_text('model_menu_hint', 19, 8, 'top_left', hint, profile.hex),
          'z_index': 111, 'timeout': 2},
     ]
+    # Four discrete class marks, distinct from catalog position and effort.
+    for i in range(4):
+        color = (profile.hex if i < profile.rank else '#24303FFF') if menu else '#00000000'
+        elements.append({**_rect(f'model_class_{i}', 1 + i * 4, 14, 3, 2, color),
+                         'z_index': 111, 'timeout': 2})
+    remaining = max(0, min(1, (menu.get('until', now) - now) / 12)) if menu else 0
+    elements.append({**_rect('model_menu_time', 19, 15, max(1, round(52 * remaining)), 1,
+                            profile.hex if menu and phase == 'browse' else '#00000000'),
+                     'z_index': 111, 'timeout': 2})
+    # Cover the shrinking track with the same IDs on every refresh.
+    elements.insert(0, {**_rect('model_menu_track', 19, 15, 52, 1,
+                               '#192332FF' if menu else '#00000000'),
+                        'z_index': 110, 'timeout': 2})
+    return elements
+
+
+def model_menu_animation_elements(menu):
+    key = model_animation.profile_key(menu['model']) if menu else 'neutral'
+    clear = 'effort_clear.anim'
+    return [
+        {'id': 'model_menu_scene', 'type': 'animation', 'display': 'front',
+         'x': 0, 'y': 0, 'path': model_animation.filename(key) if menu else clear,
+         'loop': bool(menu), 'z_index': 109, 'timeout': 15},
+    ]
+
+
+def model_menu_transition_elements(menu):
+    return [{'id': 'model_menu_motion', 'type': 'animation', 'display': 'front',
+             'x': 0, 'y': 0, 'path': model_animation.transition_filename(
+                 model_animation.profile_key(menu['model']), menu.get('direction', 1),
+                 menu.get('phase') == 'confirmed') if menu else 'effort_clear.anim',
+             'loop': False, 'z_index': 112, 'timeout': 2}]
 
 
 def render_loop(transport: HttpTransport, stop: threading.Event):
@@ -1379,6 +1443,7 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
     last_overlay_key = None
     overlay_drawn_at = 0.0
     menu_was_visible = False
+    last_menu_motion = None
     while not stop.is_set():
         STORE.dirty.clear()
         now = time.time()
@@ -1402,6 +1467,7 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
         if ai_overlay_was_active:
             scene.reset()
             last_overlay_key = None
+            last_menu_motion = None
             ai_overlay_was_active = False
 
         with RENDER_LOCK:
@@ -1425,6 +1491,7 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                 REDRAW.clear()
                 scene.reset()
                 last_overlay_key = None
+                last_menu_motion = None
             if HUBLINK is not None:
                 HUBLINK.rendering = want
 
@@ -1437,6 +1504,7 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                     DRAWN.clear()
                     scene.reset()
                     last_overlay_key = None
+                    last_menu_motion = None
             else:
                 if force:
                     # Leftovers first: a sleeping hub's frame, another style's ids.
@@ -1445,12 +1513,27 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                 control = EFFORT_CONTROLLER.status() if EFFORT_CONTROLLER else {}
                 feedback = (control.get("feedback")
                             if control.get("thread_id") == sess.get("control_thread_id") else None)
-                menu = (control.get('model_menu') if control.get('thread_id') == sess.get('control_thread_id')
+                menu = ((control.get('model_menu') or control.get('model_card')) if control.get('thread_id') == sess.get('control_thread_id')
                         and effort_input_allowed() else None)
                 if menu or menu_was_visible:
-                    if transport.draw({'application_name': APP_NAME, 'priority': DRAW_PRIORITY,
-                                       'elements': model_menu_elements(menu)}):
+                    draw_now = time.monotonic()
+                    motion = ((menu.get('changed_at'), menu.get('phase'), menu['model'])
+                              if menu else None)
+                    # A fresh detent restarts only the short sweep. Keep the
+                    # native orbit running while labels/countdown refresh.
+                    updates = [scene.pending('model_background', model_menu_animation_elements(menu), draw_now, 12),
+                               scene.pending('model_text', model_menu_elements(menu, draw_now), draw_now, 1)]
+                    motion_changed = motion != last_menu_motion
+                    if motion_changed:
+                        updates.append(scene.pending('model_motion', model_menu_transition_elements(menu), draw_now, 0))
+                    if scene.draw(transport, *updates):
                         menu_was_visible = bool(menu)
+                        last_menu_motion = motion
+                        DRAWN.set()
+                        if motion_changed and menu and menu.get('phase') == 'confirmed':
+                            EFFORT_CONTROLLER.mark_drawn(control.get('feedback_revision'))
+                if feedback == 'MODEL':
+                    feedback = None
                 # Detent feedback goes out before quota text/ring refreshes.
                 # Those can each occupy a USB round trip, even while hidden.
                 overlay_key = ((control.get("thread_id"), feedback, control.get("feedback_revision"))

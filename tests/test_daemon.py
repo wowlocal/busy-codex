@@ -296,6 +296,41 @@ class EffortRenderOrderTest(unittest.TestCase):
         self.assertEqual('effort_transition', batches[0][0]['id'])
         control.mark_drawn.assert_called_once_with(1)
 
+    def test_model_confirmation_latency_is_recorded_only_on_first_draw(self):
+        import threading
+        store = daemon.Store()
+        store.report('codex', 'test', {'state': 'WORKING', 'control_thread_id': 'test'})
+        stop = threading.Event()
+        control = mock.Mock()
+        control.status.return_value = {
+            'thread_id': 'test', 'feedback': 'MODEL', 'feedback_revision': 1,
+            'model_card': {'model': 'gpt-6-astra', 'phase': 'confirmed',
+                           'effort': 'high', 'changed_at': 10},
+        }
+        batches = []
+        def draw(payload):
+            batches.append(payload['elements'])
+            if len(batches) >= 3:
+                stop.set()
+                store.dirty.set()
+            return True
+        transport = mock.Mock()
+        transport.draw.side_effect = draw
+        with mock.patch.object(daemon, 'STORE', store), \
+             mock.patch.object(daemon, 'EFFORT_CONTROLLER', control), \
+             mock.patch.object(daemon, 'AI_MONITOR', None), \
+             mock.patch.object(daemon, 'HUBLINK', None), \
+             mock.patch.object(daemon, 'REDRAW', threading.Event()), \
+             mock.patch.object(daemon, 'DRAWN', threading.Event()), \
+             mock.patch.object(daemon, 'RENDER_MODE', 'auto'), \
+             mock.patch.object(daemon, 'device_canvas_allowed', return_value=True), \
+             mock.patch.object(daemon, 'effort_input_allowed', return_value=True), \
+             mock.patch.object(daemon, 'status_snapshot', return_value={'state': 'WORKING'}):
+            daemon.render_loop(transport, stop)
+        self.assertTrue(any(e['id'] == 'model_menu_motion' for e in batches[0]))
+        self.assertFalse(any(e['id'] == 'model_menu_scene' for e in batches[-1]))
+        control.mark_drawn.assert_called_once_with(1)
+
 
 if __name__ == "__main__":
     unittest.main()

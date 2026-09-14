@@ -100,6 +100,55 @@ class NativeClientTest(unittest.TestCase):
             self.assertEqual('model/set', self.writes[0]['method'])
             self.assertEqual('plan', self.state['collaborationMode'])
 
+    def test_model_card_waits_for_ack_and_blocks_duplicate_input(self):
+        self.state['models'] = [dict(model=m, name=m, levels=['low', 'high'], default='low')
+                                for m in ['test-model', 'other-model']]
+        self.allow_write.clear()
+        with self.controller() as controller:
+            deadline = time.monotonic() + 2
+            while not controller.model_choices and time.monotonic() < deadline:
+                time.sleep(.01)
+            controller.crown()
+            controller.rotate(1)
+            controller.crown()
+            self.assertTrue(self.write_received.wait(1))
+            self.assertEqual('saving', controller.status()['model_card']['phase'])
+            self.assertEqual('test-model', controller.status()['model'])
+            self.assertIsNone(controller.status()['feedback'])
+            self.assertFalse(controller.crown())
+            self.assertFalse(controller.rotate(1))
+            self.assertFalse(controller.toggle_fast())
+            self.allow_write.set()
+            while controller.status()['feedback'] != 'MODEL' and time.monotonic() < deadline:
+                time.sleep(.01)
+            card = controller.status()['model_card']
+            self.assertEqual(('other-model', 'confirmed', 'high'),
+                             (card['model'], card['phase'], card['effort']))
+            self.assertEqual(1, len(self.writes))
+            controller.feedback_until = 0
+            self.assertIsNone(controller.status()['model_card'])
+
+    def test_rejected_model_does_not_show_success_or_leave_saving_card(self):
+        self.state['models'] = [dict(model=m, name=m, levels=['low', 'high'], default='low')
+                                for m in ['test-model', 'other-model']]
+        self.allow_write.clear()
+        with self.controller() as controller:
+            deadline = time.monotonic() + 2
+            while not controller.model_choices and time.monotonic() < deadline:
+                time.sleep(.01)
+            controller.crown()
+            controller.rotate(1)
+            controller.crown()
+            self.assertTrue(self.write_received.wait(1))
+            self.state['revision'] += 1
+            self.allow_write.set()
+            while not controller.status()['error'] and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertEqual('ERR', controller.status()['feedback'])
+            self.assertIsNone(controller.status()['model_card'])
+            self.assertEqual('test-model', self.state['model'])
+            self.assertEqual(1, len(self.writes))
+
     def test_lost_reply_queries_original_request_without_repeating_write(self):
         self.drop_ack = True
         result = self.client.request('thread-follower-update-thread-settings',

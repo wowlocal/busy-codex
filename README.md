@@ -32,6 +32,17 @@ requests. After 12 seconds without input, the picker closes without applying.
 Back also cancels, but the firmware may exit the app at the same time.
 CLI model selection requires a fork build with the native `model/set` endpoint.
 
+The picker shows a live model card at 25 fps: mint orbits for Luna, blue orbital
+planes for Terra, a violet braid for Sol, and a pink stellar core for Astra.
+Spark has an amber orbit; GPT-5.5 uses periwinkle. Four small marks show the
+model’s visual class; unknown models use a neutral halo with no class assigned.
+`ACTIVE` marks the current model, `CLICK` invites confirmation, and the bottom
+line counts down to cancellation. `SAVING` becomes `SET <effort>` only after
+Codex acknowledges the change. START pauses while browsing or saving.
+
+These classes are editable design metadata, not benchmark scores or reasoning
+effort. Long names page through in full. See the [model picker preview](docs/img/model-picker.gif).
+
 Changes apply to subsequent turns and preserve Plan mode. They leave a running answer alone and do not change global defaults.
 The label appears after Codex confirms the setting.
 
@@ -40,7 +51,7 @@ blue currents at high, a violet helix at xhigh, gold shockwaves at max and
 plasma with sparks at ultra. Only levels supported by the selected model are
 offered. Fast ignites a gold warp; standard speed settles into blue rings.
 
-The 12-pixel bold lettering and effects play natively at 25 fps, then fade back
+Effort and Fast use 12-pixel bold lettering and native 25 fps effects, then fade back
 to the dashboard. See the [effort comparison](docs/img/effort-levels.gif) and
 [Fast / standard animation pair](docs/img/fast-modes.gif).
 

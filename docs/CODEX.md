@@ -208,3 +208,24 @@ older builds keep effort and Fast controls but do not open the model picker.
 Desktop uses visible entries in its model cache. Unsupported effort falls back
 to the selected model's default; Plan mode and global config are preserved.
 Unsent Desktop drafts still have no controllable thread.
+
+
+The model card uses native 25 fps animations independent of text updates. The
+left symbol gains complexity across four explicit visual classes: orbit,
+orbital planes, braid, stellar core. Each model profile has a stable palette;
+unknown IDs remain neutral. These are editorial classes, not measured scores,
+and do not change with effort. Extend `MODEL_PROFILES` in `model_animation.py`
+to map another model to a visual profile without changing control logic.
+
+The counter is catalog position, the four marks under the symbol are model
+class, and the bottom line is the 12-second inactivity timeout. `ACTIVE` marks
+the current model; `CLICK` previews a choice; `SAVING` waits for Codex; only an
+acknowledgement produces `SET <effort>` and the confirmation pulse. Failed
+writes show the existing error overlay. Rotation and Crown are ignored during
+an in-flight model change; START is paused while browsing or saving. Long
+names page every 1.5 seconds instead of losing their distinguishing suffix.
+
+`/hub` exposes `codex_effort.model_menu` for browsing and `model_card` for saving
+or confirmed feedback. Opening the picker, cancelling, losing focus or timing
+out never applies a preview. Rebuild and upload the new model assets when
+updating an existing installation; `--no-upload` cannot add these assets.

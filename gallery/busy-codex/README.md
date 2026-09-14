@@ -100,3 +100,16 @@ CLI model selection requires the `model/set` endpoint from the latest
 [Codex fork branch](https://github.com/wowlocal/codex/tree/codex/native-tui-control).
 Existing builds without that endpoint continue to support effort and Fast.
 Desktop controls require a sent task; unsent drafts are not exposed by its IPC.
+
+
+The picker uses native animated model cards: Luna has a mint orbit, Terra blue
+orbital planes, Sol a violet braid, and Astra a pink stellar core. Spark is
+amber and GPT-5.5 periwinkle. Four small marks indicate the explicit visual
+class; unknown models get a neutral halo. Classes are design metadata rather
+than benchmark scores and are independent of effort.
+
+`ACTIVE` marks the current model. `CLICK` previews another choice, `SAVING`
+waits for Codex, and `SET <effort>` confirms the acknowledged setting. The bottom
+line counts down to cancellation; long titles page through in full. START is
+paused while browsing or saving. Updated installations need the new animation
+assets uploaded once before using `--no-upload`.

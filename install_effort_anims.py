@@ -6,6 +6,7 @@ import urllib.request
 import animgen
 import effort_animation
 import fast_animation
+import model_animation
 import daemon
 
 
@@ -27,6 +28,7 @@ def main():
         for entering in (True, False):
             assets.append((fast_animation.filename(enabled, entering),
                            fast_animation.frames(enabled, entering)))
+    assets.extend(model_animation.assets())
     for name, frames in assets:
         blob = animgen.encode_anim(frames, fps=effort_animation.FPS)
         animgen.decode_check(blob, frames)

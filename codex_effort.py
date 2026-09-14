@@ -240,6 +240,8 @@ class Controller:
         self.pending_fast = deque()
         self.menu = None
         self.pending_model = None
+        self.model_applying = None
+        self.model_feedback = None
         self.model_choices = []
         self.due = 0
         self.last_applied_at = 0
@@ -267,6 +269,9 @@ class Controller:
             return {'enabled': True, 'connected': self.connected, 'thread_id': self.thread_id,
                     'kind': self.kind,
                     'model_menu': self.menu.snapshot() if self.menu else None,
+                    'model_card': (dict(self.model_applying, phase='saving') if self.model_applying
+                                   else self.model_feedback if self.feedback == 'MODEL'
+                                   and time.monotonic() < self.feedback_until else None),
                     'model': model, 'effort': effort, 'error': self.error,
                     'service_tier': codex_fast.current_tier(self.state),
                     'fast': codex_fast.is_fast(self.state),
@@ -286,8 +291,12 @@ class Controller:
                     or (self.target_key is not None and key != self.target_key)):
                 return False
             now = time.monotonic()
+            if self.model_applying:
+                return False
             if self.menu and now < self.menu.until:
                 self.pending_model = (self.menu.snapshot(), now)
+                self.model_applying = self.menu.snapshot()
+                self.model_applying['changed_at'] = now
                 self.menu = None
             else:
                 if not self.model_choices or self.pending_model:
@@ -295,6 +304,7 @@ class Controller:
                 self.menu = ModelMenu(self.model_choices, model_effort(self.state)[0], now)
                 self.pending = 0
                 self.feedback = None
+                self.model_feedback = None
         self.changed()
         self.wake.set()
         return True
@@ -321,7 +331,7 @@ class Controller:
                 self.changed()
                 return True
             self.menu = None
-            if self.pending_model:
+            if self.pending_model or self.model_applying:
                 return False
             if not self.pending:
                 self.pending_since = time.monotonic()
@@ -338,7 +348,9 @@ class Controller:
         with self.lock:
             if (not target or target != self.thread_id or not self.connected
                     or (self.target_key is not None and key != self.target_key)
-                    or len(self.pending_fast) >= 8):
+                    or len(self.pending_fast) >= 8
+                    or self.model_applying
+                    or (self.menu and time.monotonic() < self.menu.until)):
                 return False
             self.pending_fast.append(time.monotonic())
         self.wake.set()
@@ -385,6 +397,7 @@ class Controller:
                         self.state, self.revision, self.pending = {}, None, 0
                         self.pending_fast.clear()
                         self.menu = self.pending_model = None
+                        self.model_applying = self.model_feedback = None
                         self.model_choices = []
                         self.connected, self.feedback, self.error = False, None, ''
                         self.confirmation_ms = self.display_ms = None
@@ -448,6 +461,8 @@ class Controller:
                         state = copy.deepcopy(self.state)
                     if (not delta and fast_at is None and model_request is None) or self.selection()[2] != target_key or not self.allowed():
                         with self.lock:
+                            if model_request:
+                                self.model_applying = None
                             wait = min(.05, max(0, self.due - time.monotonic())) if self.pending else .05
                         if not readable:
                             self.wake.wait(wait)
@@ -459,7 +474,7 @@ class Controller:
                             raise CatalogError('Selected model is no longer available')
                         settings = model_settings(state, choice['model'], choice['levels'], choice['default'])
                         requested = settings['effort']
-                        feedback = requested.upper()
+                        feedback = 'MODEL'
                         def confirmed():
                             return model_effort(self.state) == (choice['model'], requested)
                     elif fast_at is not None:
@@ -493,8 +508,14 @@ class Controller:
                             raise ValueError('Codex did not confirm settings change')
                     # Focus may have moved while awaiting the owner's reply.
                     if self.selection()[2] != target_key or not self.allowed():
+                        with self.lock:
+                            self.model_applying = None
                         continue
                     with self.lock:
+                        self.model_applying = None
+                        self.model_feedback = (dict(choice, phase='confirmed', effort=requested,
+                                                    changed_at=time.monotonic())
+                                               if model_request else None)
                         self.feedback = feedback
                         self.feedback_revision += 1
                         self.direction = 1 if delta > 0 else -1
@@ -514,6 +535,7 @@ class Controller:
                     with self.lock:
                         self.confirmation_ms = self.display_ms = None
                         self.error = str(error)
+                        self.model_applying = self.model_feedback = None
                         self.feedback = 'ERR'
                         self.feedback_revision += 1
                         self.feedback_until = time.monotonic() + 2.5
@@ -530,6 +552,7 @@ class Controller:
                         self.pending = 0
                         self.pending_fast.clear()
                         self.menu = self.pending_model = None
+                        self.model_applying = self.model_feedback = None
                         self.feedback = 'ERR' if delta or fast_at is not None or model_request else None
                         self.feedback_revision += 1
                         self.feedback_until = time.monotonic() + 2.5

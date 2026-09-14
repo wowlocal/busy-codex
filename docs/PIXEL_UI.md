@@ -78,3 +78,26 @@ Preview the START-button pair with the same exporter:
 ```sh
 python3 preview_effort.py --out /tmp/fast-preview --levels fast normal
 ```
+
+
+## Model cards
+
+`model_animation.py` supplies model profiles, looping native card backgrounds,
+directional rim sweeps and confirmation pulses. `daemon.model_menu_elements`
+places the dynamic title, action, class marks and timeout over those assets.
+Background and text use separate draw-cache groups, so updating the countdown
+does not restart the orbit. The animation keepalive is a multiple of its loop.
+Both the gallery builder and `install_effort_anims.py` include all model assets.
+
+Export a contact sheet and a browse/save/confirm walkthrough:
+
+```sh
+python3 preview_models.py --out /tmp/model-preview
+```
+
+Pillow is only required for export. Effects use the exact production frames;
+the preview’s 3×5 text approximates the firmware’s built-in font. Confirm text
+appearance with an actual device screenshot before claiming hardware visual
+verification. Profiles are explicit editorial design metadata, with a neutral
+fallback; they do not infer intelligence from version numbers, catalog order
+or supported reasoning levels.
