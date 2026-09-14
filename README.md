@@ -39,8 +39,8 @@ model’s visual class; unknown models use a neutral halo with no class assigned
 `ACTIVE` marks the current model, `CLICK` invites confirmation, and the bottom
 line counts down to cancellation. `SAVING` becomes `SELECTED` only after
 Codex acknowledges the change. Confirmation lasts 1.3 seconds. START pauses
-while browsing or saving. The dashboard label keeps the same model color
-after the picker closes.
+while browsing or saving. The dashboard keeps the model name in its model color and colors the effort
+word separately using the effort animation palette.
 
 These classes are editable design metadata, not benchmark scores or reasoning
 effort. Long names page through in full. See the [model picker preview](docs/img/model-picker.gif).

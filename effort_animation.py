@@ -26,6 +26,13 @@ PALETTES = (
 SPEEDS = (.2, .4, .65, 1., 1.4, 2., 2.7, 3.6)
 
 
+def effort_color(effort):
+    """Use the same accent on the dashboard as in the effort animation."""
+    if effort not in LEVELS:
+        return None
+    return '#' + ''.join(f'{c:02X}' for c in PALETTES[LEVELS.index(effort)][1]) + 'FF'
+
+
 def word_pixels(word):
     """Compatibility helper for tools that inspect the effort label geometry."""
     mask = EFFORT_BOLD.layout(word)

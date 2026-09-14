@@ -237,7 +237,7 @@ def probe(usage=None, selection=None) -> dict | None:
         control_id = target['thread_id']
     return {
         "source": "codex", "session_id": session_id, "state": state,
-        "control_thread_id": control_id,
+        "control_thread_id": control_id, "reasoning_effort": effort,
         "label": label, "label_color": model_animation.model_color(model), "context_pct": context_pct,
         "badges": badges, "ttl_s": 600,
         **(usage or {}),

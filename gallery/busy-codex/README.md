@@ -120,5 +120,5 @@ line counts down to cancellation; long titles page through in full. START is
 paused while browsing or saving. Updated installations need the new animation
 assets uploaded once before using `--no-upload`.
 
-Model confirmation lasts 1.3 seconds. On the normal dashboard, the model/effort
-label keeps the selected model’s color from the picker.
+Model confirmation lasts 1.3 seconds. On the normal dashboard, the model
+name keeps its picker color; the effort word uses its own animation palette.

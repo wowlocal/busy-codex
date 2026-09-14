@@ -365,7 +365,7 @@ class Store:
                 s = self.sessions.setdefault(key, {
                     "source": source, "state": "IDLE", "state_ts": 0.0,
                     "last_active": 0.0, "focus_ts": 0.0, "seen_ts": 0.0,
-                    "label": None, "label_color": None,
+                    "label": None, "label_color": None, "reasoning_effort": None,
                     "context_pct": None, "quotas": None, "quota_status": None, "badges": None,
                     "host": None, "host_tag": None, "ttl_s": DEFAULT_TTL_S,
                     "rev": 0, "mirrored": False, "lease_s": None,
@@ -385,7 +385,7 @@ class Store:
                         s["state_ts"] = fields.get("state_ts", now)
                 if "focus_ts" in fields:
                     s["focus_ts"] = fields["focus_ts"]   # mirrored: the origin decided
-                for k in ("label", "label_color", "context_pct", "quotas", "quota_status",
+                for k in ("label", "label_color", "reasoning_effort", "context_pct", "quotas", "quota_status",
                           "badges", "host", "host_tag", "ttl_s", "control_thread_id"):
                     if k in fields:
                         s[k] = fields[k]
@@ -486,7 +486,7 @@ def effort_input_allowed():
 # Standby role: mirror every session to the hub, render only while it is down
 # --------------------------------------------------------------------------
 
-MIRROR_FIELDS = ("label", "label_color", "context_pct", "quotas", "quota_status", "badges",
+MIRROR_FIELDS = ("label", "label_color", "reasoning_effort", "context_pct", "quotas", "quota_status", "badges",
                  "host", "host_tag", "ttl_s")
 MAINTENANCE_UNTIL = 0.0  # local installer lease; expires if the installer exits
 RENDER_LOCK = threading.Lock()   # one canvas transaction at a time (a yield waits on it)
@@ -778,6 +778,7 @@ def status_snapshot() -> dict:
             quota_status["age_s"] = max(0, round(now - observed_at, 1))
     label = sess.get("label")
     label_color = sess.get("label_color")
+    reasoning_effort = sess.get("reasoning_effort")
     badges = sess.get("badges")
     if EFFORT_CONTROLLER:
         control = EFFORT_CONTROLLER.status(display_thread_id=sess.get("control_thread_id"))
@@ -786,6 +787,7 @@ def status_snapshot() -> dict:
                     else control.get("display", {})) if sess.get("control_thread_id") else {}
         if settings.get("model") and settings.get("effort"):
             from adapters.codex_status import prettify_model
+            reasoning_effort = settings["effort"]
             label_color = model_animation.model_color(settings["model"])
             label = shorten_model_label(prettify_model(settings["model"]),
                                         settings["effort"], LABEL_MAX_PX)
@@ -797,6 +799,7 @@ def status_snapshot() -> dict:
         "state": effective_state(sess),
         "label": label,
         "label_color": label_color,
+        "reasoning_effort": reasoning_effort,
         "context_pct": sess.get("context_pct"),
         "quotas": quotas or None,
         "quota_status": quota_status or None,
@@ -1258,11 +1261,23 @@ def info_elements(status: dict, astra: dict | None = None) -> list[dict]:
         label_max -= est_width(tag) + 2  # the tag sits right after the label
     label = status.get("label") or ""
     label = "".join(ch for ch in label if 0x20 <= ord(ch) <= 0x7E)  # ASCII-only font
-    while label and est_width(label) > label_max:
-        label = label[:-1]
-    if label:
-        elements.append(_text("model", 3, 0, "top_left", label,
-                              _norm_color(status.get("label_color"), LABEL_FALLBACK_COLOR)))
+    effort = status.get('reasoning_effort') if status.get('source') == 'codex' else None
+    effort_color = effort_animation.effort_color(effort)
+    suffix = ' ' + effort if effort_color else ''
+    split_effort = bool(suffix and label.endswith(suffix))
+    if split_effort:
+        # Reserve the full effort word before shortening the model. Parsing the
+        # label alone would misidentify custom names ending in "high" or "max".
+        label = shorten_model_label(label[:-len(suffix)], effort, label_max)
+    else:
+        while label and est_width(label) > label_max:
+            label = label[:-1]
+    name = label[:-len(suffix)] if split_effort and label.endswith(suffix) else ('' if split_effort else label)
+    elements.append(_text('model', 3, 0, 'top_left', name or ' ',
+                          _norm_color(status.get('label_color'), LABEL_FALLBACK_COLOR)))
+    effort_x = 3 + est_width(name + ' ') if name else 3
+    elements.append(_text('model_effort', effort_x if split_effort else 3, 0, 'top_left',
+                          effort if split_effort else ' ', effort_color or LABEL_FALLBACK_COLOR))
     x = 3 + est_width(label)
     # Host tag (which computer this session lives on). Both variants are
     # always sent - blank/transparent when unused - so a stale tag never
@@ -1714,6 +1729,9 @@ class Handler(BaseHTTPRequestHandler):
                 fields["state"] = state
             if "label" in data:
                 fields["label"] = str(data["label"] or "")[:64] or None
+            if "reasoning_effort" in data:
+                value = data['reasoning_effort']
+                fields['reasoning_effort'] = value if value in effort_animation.LEVELS else None
             if "label_color" in data:
                 fields["label_color"] = str(data["label_color"] or "") or None
             if "context_pct" in data:

@@ -232,7 +232,7 @@ or confirmed feedback. Opening the picker, cancelling, losing focus or timing
 out never applies a preview. Rebuild and upload the new model assets when
 updating an existing installation; `--no-upload` cannot add these assets.
 
-The normal dashboard colors its model/effort label with the same model palette
-as the picker. Color follows confirmed settings (including the retained hidden
+The normal dashboard colors the model name with the picker palette and the
+effort word with its own effort animation accent. Color follows confirmed settings (including the retained hidden
 task), never the model being previewed. Effort/Fast overlays keep their existing
 1.8-second timing and their own colors.

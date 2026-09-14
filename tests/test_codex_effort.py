@@ -76,6 +76,30 @@ class EffortTest(unittest.TestCase):
             self.assertEqual(expected, snapshot['label_color'])
             elements = daemon.info_elements(snapshot)
             self.assertEqual(expected, next(e['color'] for e in elements if e['id'] == 'model'))
+            effort_label = next(e for e in elements if e['id'] == 'model_effort')
+            self.assertEqual(('low', '#14915FFF'), (effort_label['text'], effort_label['color']))
+
+    def test_effort_word_keeps_its_color_and_space_and_clears_between_sources(self):
+        import effort_animation
+        for style in ('minimal', 'avatar'):
+            for tag in (None, 'W', '#ABCDEF'):
+                for level in effort_animation.LEVELS:
+                    status = {'source': 'codex', 'state': 'IDLE', 'host_tag': tag,
+                              'label': '6 Very Long Model Name ' + level,
+                              'reasoning_effort': level, 'label_color': '#FF70C0FF'}
+                    with mock.patch.object(daemon, 'STYLE', style):
+                        elements = daemon.info_elements(status)
+                    model = next(e for e in elements if e['id'] == 'model')
+                    word = next(e for e in elements if e['id'] == 'model_effort')
+                    self.assertEqual(level, word['text'])
+                    self.assertEqual(effort_animation.effort_color(level), word['color'])
+                    self.assertGreaterEqual(word['x'], model['x'] + daemon.est_width(model['text']))
+                    edge = daemon.AVATAR_X - 4 if style == 'avatar' else daemon.BAR_X - 2
+                    self.assertLessEqual(word['x'] + daemon.est_width(level), edge)
+        # Unstructured/custom model names must not be mistaken for effort.
+        for source in ('codex', 'claude-code'):
+            elements = daemon.info_elements({'source': source, 'state': 'IDLE', 'label': 'Custom low'})
+            self.assertEqual(' ', next(e['text'] for e in elements if e['id'] == 'model_effort'))
 
     def test_catalog_is_model_specific_and_ordered(self):
         with tempfile.TemporaryDirectory() as d:
