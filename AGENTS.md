@@ -10,6 +10,18 @@ acting; the older Astra AI and Claude device apps are separate integrations.
 
 ## Build and launch on this Mac
 
+- Prefer `./install.sh` to install/restart the current checkout. Use
+  `./install.sh --update` only when fetching upstream updates is requested;
+  it requires a clean tree and uses `git pull --ff-only`.
+- The installer builds and verifies the package, uploads assets, restarts only
+  verified BUSY workers, and captures diagnostics/screenshots. It detects an
+  existing source/CLI installation and preserves its port and asset namespace.
+  In that case the live workers still run from this checkout, not the package.
+  See `docs/INSTALLATION.md`; the low-level commands below remain available.
+- A legacy `codex_cli.py` can restart daemon/adapter workers every ten seconds.
+  Never stop that CLI just to update the Bar. Use the installer’s maintenance
+  lease to pause rendering during asset upload while keeping health available.
+
 - Use `/usr/bin/python3` for the live app on this Mac. In the September 11,
   2026 session, pyenv Python 3.11.11 started the workers but foreground
   detection failed with `macOS background registration failed (status=-50)`.

@@ -49,6 +49,34 @@ class EffortTest(unittest.TestCase):
              mock.patch.object(daemon, 'EFFORT_CONTROLLER', control):
             self.assertEqual('Old low', daemon.status_snapshot()['label'])
 
+    def test_dashboard_color_follows_confirmed_model_and_survives_hiding(self):
+        import model_animation
+        control = effort.Controller(lambda: 'selected', lambda: None)
+        control.thread_id, control.connected = 'selected', True
+        control.state = {'latestThreadSettings': {'model': 'gpt-6-astra', 'effort': 'high'}}
+        control.model_choices = [dict(model=m, levels=['low', 'high'], default='low')
+                                 for m in ('gpt-6-astra', 'gpt-5.6-luna')]
+        store = daemon.Store()
+        store.report('codex', 'selected', {'state': 'WORKING', 'label': 'Stale model',
+                                         'label_color': '#FFFFFF', 'control_thread_id': 'selected'})
+        with mock.patch.object(daemon, 'STORE', store), \
+             mock.patch.object(daemon, 'EFFORT_CONTROLLER', control):
+            control.crown()
+            control.rotate(1)
+            # Browsing Luna cannot recolor the still-selected Astra dashboard.
+            self.assertEqual(model_animation.model_color('gpt-6-astra'),
+                             daemon.status_snapshot()['label_color'])
+            control.cancel_menu()
+            control.on_change({'type': 'snapshot', 'revision': 2, 'conversationState': {
+                'latestThreadSettings': {'model': 'gpt-5.6-luna', 'effort': 'low'}}})
+            expected = model_animation.model_color('gpt-5.6-luna')
+            self.assertEqual(expected, daemon.status_snapshot()['label_color'])
+            control.thread_id, control.state, control.connected = None, {}, False
+            snapshot = daemon.status_snapshot()
+            self.assertEqual(expected, snapshot['label_color'])
+            elements = daemon.info_elements(snapshot)
+            self.assertEqual(expected, next(e['color'] for e in elements if e['id'] == 'model'))
+
     def test_catalog_is_model_specific_and_ordered(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, 'models_cache.json').write_text(json.dumps({'models': [

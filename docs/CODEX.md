@@ -2,7 +2,9 @@
 
 [Back to BUSY Codex](../README.md)
 
-Start with the [standalone app](../README.md#quick-start). This guide covers
+Start with `./install.sh`; use `./install.sh --update` for later updates.
+See the [installation guide](INSTALLATION.md) for the automatic worker and asset
+update workflow. This guide covers
 native CLI controls, optional background services and diagnostics. Commands
 below run from the source checkout unless stated otherwise.
 
@@ -220,7 +222,7 @@ to map another model to a visual profile without changing control logic.
 The counter is catalog position, the four marks under the symbol are model
 class, and the bottom line is the 12-second inactivity timeout. `ACTIVE` marks
 the current model; `CLICK` previews a choice; `SAVING` waits for Codex; only an
-acknowledgement produces `SET <effort>` and the confirmation pulse. Failed
+acknowledgement produces `SELECTED` and the confirmation pulse for 1.3 seconds. Failed
 writes show the existing error overlay. Rotation and Crown are ignored during
 an in-flight model change; START is paused while browsing or saving. Long
 names page every 1.5 seconds instead of losing their distinguishing suffix.
@@ -229,3 +231,8 @@ names page every 1.5 seconds instead of losing their distinguishing suffix.
 or confirmed feedback. Opening the picker, cancelling, losing focus or timing
 out never applies a preview. Rebuild and upload the new model assets when
 updating an existing installation; `--no-upload` cannot add these assets.
+
+The normal dashboard colors its model/effort label with the same model palette
+as the picker. Color follows confirmed settings (including the retained hidden
+task), never the model being previewed. Effort/Fast overlays keep their existing
+1.8-second timing and their own colors.

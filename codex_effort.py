@@ -20,7 +20,7 @@ import uuid
 
 from effort_animation import DURATION_S
 import codex_fast
-from codex_model_menu import ModelMenu, model_settings
+from codex_model_menu import CONFIRMATION_S, ModelMenu, model_settings
 
 LEVELS = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra')
 STATE_KEYS = {'latestThreadSettings', 'latestModel', 'latestReasoningEffort',
@@ -270,7 +270,7 @@ class Controller:
                     'kind': self.kind,
                     'model_menu': self.menu.snapshot() if self.menu else None,
                     'model_card': (dict(self.model_applying, phase='saving') if self.model_applying
-                                   else self.model_feedback if self.feedback == 'MODEL'
+                                   else dict(self.model_feedback, until=self.feedback_until) if self.feedback == 'MODEL'
                                    and time.monotonic() < self.feedback_until else None),
                     'model': model, 'effort': effort, 'error': self.error,
                     'service_tier': codex_fast.current_tier(self.state),
@@ -520,7 +520,7 @@ class Controller:
                         self.feedback_revision += 1
                         self.direction = 1 if delta > 0 else -1
                         self.last_applied_at = time.monotonic()
-                        self.feedback_until = self.last_applied_at + DURATION_S
+                        self.feedback_until = self.last_applied_at + (CONFIRMATION_S if model_request else DURATION_S)
                         self.feedback_input_at = input_at
                         self.confirmation_ms = round((self.last_applied_at - input_at) * 1000, 1)
                         self.display_ms = None

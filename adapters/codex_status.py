@@ -3,11 +3,12 @@
 
 Zero-config and rename-proof: everything is derived from what Codex
 itself reports (config defaults, the selected task's rollout and the
-account/rateLimits/read API). No model-name tables anywhere:
+account/rateLimits/read API). Labels and capabilities use no model-name tables:
 
   - label:   the raw model id, prettified by GENERIC rules only
              ("gpt-5.6-sol" -> "5.6 Sol"; a future "gpt-7-luna" ->
              "7 Luna" with zero changes here), plus the reasoning effort
+  - color:   shared model palette, with a neutral fallback for unknown IDs
   - badges:  service_tier other than default becomes a badge
              ("fast" selects the yellow high-speed working contour)
   - context: last_token_usage.total_tokens / model_context_window
@@ -36,6 +37,7 @@ import report  # noqa: E402  (daemon/hub address + host headers from env.sh)
 import codex_focus
 import codex_target
 import codex_usage
+import model_animation
 
 DAEMON = report.BASE + "/v1/report"
 CODEX_HOME = pathlib.Path(report.ENV.get("CODEX_HOME", pathlib.Path.home() / ".codex"))
@@ -236,7 +238,7 @@ def probe(usage=None, selection=None) -> dict | None:
     return {
         "source": "codex", "session_id": session_id, "state": state,
         "control_thread_id": control_id,
-        "label": label, "context_pct": context_pct,
+        "label": label, "label_color": model_animation.model_color(model), "context_pct": context_pct,
         "badges": badges, "ttl_s": 600,
         **(usage or {}),
     }

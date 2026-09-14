@@ -459,6 +459,8 @@ def effort_target_info():
 
 
 def effort_input_block_reason():
+    if time.monotonic() < MAINTENANCE_UNTIL:
+        return 'BUSY Codex update in progress'
     target = effort_target()
     if not target:
         return effort_target_info().get('error') or 'No Codex task selected'
@@ -486,6 +488,7 @@ def effort_input_allowed():
 
 MIRROR_FIELDS = ("label", "label_color", "context_pct", "quotas", "quota_status", "badges",
                  "host", "host_tag", "ttl_s")
+MAINTENANCE_UNTIL = 0.0  # local installer lease; expires if the installer exits
 RENDER_LOCK = threading.Lock()   # one canvas transaction at a time (a yield waits on it)
 DRAWN = threading.Event()        # what is on the Bar right now was painted by us
 
@@ -774,6 +777,7 @@ def status_snapshot() -> dict:
         if finite_number(observed_at):
             quota_status["age_s"] = max(0, round(now - observed_at, 1))
     label = sess.get("label")
+    label_color = sess.get("label_color")
     badges = sess.get("badges")
     if EFFORT_CONTROLLER:
         control = EFFORT_CONTROLLER.status(display_thread_id=sess.get("control_thread_id"))
@@ -782,6 +786,7 @@ def status_snapshot() -> dict:
                     else control.get("display", {})) if sess.get("control_thread_id") else {}
         if settings.get("model") and settings.get("effort"):
             from adapters.codex_status import prettify_model
+            label_color = model_animation.model_color(settings["model"])
             label = shorten_model_label(prettify_model(settings["model"]),
                                         settings["effort"], LABEL_MAX_PX)
         if settings.get("fast") is not None:
@@ -791,7 +796,7 @@ def status_snapshot() -> dict:
         "source": sess["source"],
         "state": effective_state(sess),
         "label": label,
-        "label_color": sess.get("label_color"),
+        "label_color": label_color,
         "context_pct": sess.get("context_pct"),
         "quotas": quotas or None,
         "quota_status": quota_status or None,
@@ -1124,6 +1129,8 @@ def avatar_element(state: str) -> dict:
 
 
 def device_canvas_allowed() -> bool:
+    if time.monotonic() < MAINTENANCE_UNTIL:
+        return False
     with DEVICE_INPUT_LOCK:
         mode_allowed = DEVICE_MODE not in ("APPS", "SETTINGS")
     return mode_allowed and not astra_app_status()["active"]
@@ -1388,7 +1395,7 @@ def model_menu_elements(menu, now=None):
     if phase == 'saving':
         hint = 'SAVING' + '.' * (int(age * 2) % 3)
     elif phase == 'confirmed':
-        hint = 'SET ' + menu.get('effort', '').upper()
+        hint = 'SELECTED'
     elif menu:
         hint = f"{menu['index'] + 1}/{menu['count']} " + ('ACTIVE' if menu.get('active') else 'CLICK')
     else:
@@ -1446,6 +1453,7 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
     last_menu_motion = None
     while not stop.is_set():
         STORE.dirty.clear()
+        model_deadline = None
         now = time.time()
         if now - last_tick > SUSPEND_GAP_S:
             # This computer slept. Mirrors we hold are stale (their standby
@@ -1515,6 +1523,8 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                             if control.get("thread_id") == sess.get("control_thread_id") else None)
                 menu = ((control.get('model_menu') or control.get('model_card')) if control.get('thread_id') == sess.get('control_thread_id')
                         and effort_input_allowed() else None)
+                if menu:
+                    model_deadline = menu.get('until')
                 if menu or menu_was_visible:
                     draw_now = time.monotonic()
                     motion = ((menu.get('changed_at'), menu.get('phase'), menu['model'])
@@ -1574,7 +1584,9 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
                               scene.pending("animations", anims, draw_now, ANIM_REFRESH_S),
                               scene.pending("information", texts, draw_now, KEEPALIVE_S)):
                     DRAWN.set()
-        STORE.dirty.wait(timeout=0.5)
+        # Wake at the card deadline, not up to half a second after it.
+        delay = .5 if model_deadline is None else max(.01, min(.5, model_deadline - time.monotonic()))
+        STORE.dirty.wait(timeout=delay)
 
 # --------------------------------------------------------------------------
 # Report/status server
@@ -1616,9 +1628,11 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(200, json.dumps(astra_watch_status()).encode())
         elif self.path == "/hub":
             self._reply(200, json.dumps({
-                "ok": True, "instance": INSTANCE, "role": ROLE, "style": STYLE,
+                "ok": True, "instance": INSTANCE, "pid": os.getpid(), "application_name": APP_NAME,
+                "role": ROLE, "style": STYLE,
                 "render_mode": RENDER_MODE,
                 "device_mode": DEVICE_MODE,
+                "maintenance": time.monotonic() < MAINTENANCE_UNTIL,
                 "device_input": {
                     "connected": DEVICE_INPUT_CONNECTED,
                     "error": DEVICE_INPUT_ERROR,
@@ -1657,6 +1671,7 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(404)
 
     def do_POST(self):
+        global MAINTENANCE_UNTIL
         parsed = urllib.parse.urlparse(self.path)
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b""
@@ -1773,6 +1788,28 @@ class Handler(BaseHTTPRequestHandler):
             elif state in STATES:
                 STORE.report("claude-code", sid, {"state": state, **host_fields})
             self._reply(200)
+
+        elif parsed.path == "/maintenance":
+            if self.client_address[0] not in ("127.0.0.1", "::1"):
+                self._reply(403)
+                return
+            seconds = data.get('seconds') if isinstance(data, dict) else None
+            if not finite_number(seconds) or not 0 <= seconds <= 60:
+                self._reply(400, b'{"error":"seconds must be between 0 and 60"}')
+                return
+            with RENDER_LOCK:
+                was_active = time.monotonic() < MAINTENANCE_UNTIL
+                MAINTENANCE_UNTIL = time.monotonic() + seconds if seconds else 0
+                if seconds and TRANSPORT and not was_active:
+                    if not TRANSPORT.clear(APP_NAME):
+                        MAINTENANCE_UNTIL = 0
+                        self._reply(503, b'{"error":"could not release device canvas"}')
+                        return
+                    DRAWN.clear()
+                if not was_active or not seconds:
+                    REDRAW.set()
+                    STORE.dirty.set()
+            self._reply(200, b'{"ok":true}')
 
         elif parsed.path == "/shutdown":
             # Loopback only. Exit cleanly; the next Claude Code activity

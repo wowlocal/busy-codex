@@ -8,6 +8,7 @@ import argparse
 from pathlib import Path
 
 import daemon
+from codex_model_menu import CONFIRMATION_S
 import model_animation as animation
 
 # A preview-only 3x5 alphabet. Device text is rendered by its built-in font.
@@ -88,7 +89,7 @@ def export(output, scale=8):
     walkthrough = []
     for i, phase in enumerate(('browse', 'browse', 'browse', 'browse', 'saving', 'confirmed')):
         menu = dict(menus[min(i, 3)], phase=phase, effort='HIGH')
-        for f in range(45):
+        for f in range(round(CONFIRMATION_S * animation.FPS) if phase == 'confirmed' else 45):
             image = card(menu, f).resize((72 * scale, 16 * scale), Image.Resampling.NEAREST)
             walkthrough.append(image.quantize(palette=palette, dither=Image.Dither.NONE))
     walkthrough[0].save(output / 'model-picker.gif', save_all=True, append_images=walkthrough[1:],

@@ -241,6 +241,8 @@ def run(args):
     # Fail before drawing or starting anything when a prior instance owns the
     # local endpoint. It would be unsafe to feed an unrelated daemon's port.
     with socket.socket() as probe:
+        if os.name != "nt":
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind(("127.0.0.1", args.port))
         except OSError as exc:

@@ -2,6 +2,7 @@
 import copy
 
 TIMEOUT_S = 12
+CONFIRMATION_S = 1.3
 
 
 def model_settings(state, model, levels, default):

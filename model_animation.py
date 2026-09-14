@@ -42,6 +42,10 @@ def profile_key(model):
     return MODEL_PROFILES.get(model.lower(), 'neutral')
 
 
+def model_color(model):
+    return PROFILES[profile_key(model)].hex
+
+
 def label(model, name=None):
     # Preserve version and distinguishing suffix, not the repeated vendor name.
     value = re.sub(r'^gpt[- ]', '', name or model, flags=re.I)

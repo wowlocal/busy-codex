@@ -125,6 +125,8 @@ class NativeClientTest(unittest.TestCase):
             self.assertEqual(('other-model', 'confirmed', 'high'),
                              (card['model'], card['phase'], card['effort']))
             self.assertEqual(1, len(self.writes))
+            self.assertAlmostEqual(1.3, controller.feedback_until - controller.last_applied_at)
+            self.assertEqual(controller.feedback_until, card['until'])
             controller.feedback_until = 0
             self.assertIsNone(controller.status()['model_card'])
 

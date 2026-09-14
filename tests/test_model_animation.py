@@ -37,7 +37,11 @@ class ModelAnimationTests(unittest.TestCase):
                 menu = dict(model=model, index=99, count=100, phase=phase,
                             effort='minimal', until=12, changed_at=0)
                 for now in (0, 2, 5, 11.9):
-                    for e in daemon.model_menu_elements(menu, now):
+                    elements = daemon.model_menu_elements(menu, now)
+                    if phase == 'confirmed':
+                        self.assertEqual('SELECTED', next(e['text'] for e in elements
+                                                        if e['id'] == 'model_menu_hint'))
+                    for e in elements:
                         self.assertGreaterEqual(e['x'], 0)
                         self.assertGreaterEqual(e['y'], 0)
                         if e['type'] == 'text':

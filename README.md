@@ -37,8 +37,10 @@ planes for Terra, a violet braid for Sol, and a pink stellar core for Astra.
 Spark has an amber orbit; GPT-5.5 uses periwinkle. Four small marks show the
 model’s visual class; unknown models use a neutral halo with no class assigned.
 `ACTIVE` marks the current model, `CLICK` invites confirmation, and the bottom
-line counts down to cancellation. `SAVING` becomes `SET <effort>` only after
-Codex acknowledges the change. START pauses while browsing or saving.
+line counts down to cancellation. `SAVING` becomes `SELECTED` only after
+Codex acknowledges the change. Confirmation lasts 1.3 seconds. START pauses
+while browsing or saving. The dashboard label keeps the same model color
+after the picker closes.
 
 These classes are editable design metadata, not benchmark scores or reasoning
 effort. Long names page through in full. See the [model picker preview](docs/img/model-picker.gif).
@@ -79,40 +81,69 @@ signed in with your ChatGPT account. Foreground Desktop and terminal control
 currently runs on **macOS**. The live app uses only Python's standard library;
 there are no pip dependencies to install.
 
-Clone this repository and build the complete app folder:
+Clone the repository and run the installer:
 
 ```sh
 git clone https://github.com/wowlocal/busy-codex.git
 cd busy-codex
-python3 scripts/build_gallery.py --output "$HOME/.local/share/busy-codex"
-python3 "$HOME/.local/share/busy-codex/app.py"
+./install.sh
 ```
 
-The launcher uploads its animations and starts the display and Codex adapter.
-Keep it running; **Ctrl-C stops both workers** and releases the display. It does
-not create login items or restart exited workers. Run one BUSY Codex instance
-at a time so it owns the dial and START button.
+**Install or restart your current checkout:** `./install.sh`.
+**Get the latest version and update:** `./install.sh --update`.
 
-For Wi-Fi, pass the Bar's address. If its API requires authentication, set
-`BUSYBAR_TOKEN` in your environment.
+The script uses system Python on macOS, builds and verifies the complete app,
+uploads its animations, replaces the previous BUSY workers, and runs in the
+background. It records logs, status and screenshots under
+`~/.local/state/busy-codex/`. You can close the installation terminal. It adds
+no login items and does not change or restart Codex itself.
+
+`--update` uses `git pull --ff-only` and refuses uncommitted changes. It never
+resets your branch or discards local work. Run the same command after each
+update; there is no separate manual build or animation-upload step.
+
+For a new Wi-Fi installation:
 
 ```sh
-python3 "$HOME/.local/share/busy-codex/app.py" --host 192.168.1.50
+./install.sh --host 192.168.1.50
 ```
 
-Useful launch options:
+If authentication is enabled, export `BUSYBAR_TOKEN` before running the script.
+The script uses the existing token without printing or saving it. Standalone
+host, report port and status-only mode are remembered for later updates.
 
-| Option | Purpose |
+| Installer option | Purpose |
 | --- | --- |
-| `--no-effort` | Show status and limits without changing effort or Fast mode. |
-| `--no-upload` | Reuse this version's animation assets after the first successful launch. |
-| `--port 18766` | Change the local report port from its default, 18765. |
-| `--demo` | Play synthetic effort and Fast animations on the Bar without a Codex account. |
+| `--update` | Pull the latest commits, then install; put this option first. |
+| `--host IP[:PORT]` | Select the device for a standalone installation. |
+| `--port 18766` | Select the standalone report port; default is 18765. |
+| `--no-effort` / `--effort` | Disable or re-enable standalone Codex controls. |
 
-To update, stop the app, pull the repository, rerun the build command and launch
-again. The builder refreshes its own output folder. A complete app folder from
-the [gallery](https://maxswinkels.github.io/busybar-apps/) can also be run directly
-with `python3 app.py`.
+Existing source/CLI installations are updated in place, preserving `env.sh`,
+their report port (usually **8765**), asset namespace and existing supervisor.
+The installer pauses drawing while uploading so the CLI watchdog cannot restart
+the renderer in the middle of an update. Configure these installations through
+`env.sh`; device/port overrides above are for standalone installations.
+
+After installation, open a sent Codex task, switch the Bar to **CUSTOM**, then
+click Crown. The script reports unavailable controls or unknown device mode;
+a running process alone does not prove the dashboard is visible. See the
+[installation guide](docs/INSTALLATION.md) for logs, stopping, and troubleshooting.
+
+### Manual foreground launch
+
+For development, or a complete folder downloaded from the
+[gallery](https://maxswinkels.github.io/busybar-apps/), the foreground launcher
+remains available. Stop the existing instance first:
+
+```sh
+/usr/bin/python3 scripts/build_gallery.py --output "$HOME/.local/share/busy-codex"
+/usr/bin/python3 "$HOME/.local/share/busy-codex/app.py"
+```
+
+Ctrl-C stops its two workers. `--demo` previews effort/Fast animations;
+`--no-upload` is only for assets already uploaded successfully from this build.
+The standalone launcher uses port **18765** unless passed `--port`.
 
 ## Compatibility
 

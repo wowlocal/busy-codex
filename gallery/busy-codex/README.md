@@ -15,6 +15,12 @@ This is an independent community app, not an OpenAI or BUSY Bar product.
 
 ## Run
 
+For a source checkout, use `./install.sh` for installation and
+`./install.sh --update` for upgrades. See the
+[installation guide](https://github.com/wowlocal/busy-codex/blob/main/docs/INSTALLATION.md).
+The commands below are for this complete gallery folder.
+
+
 Download this **complete folder**. Python 3.9 or later is the only runtime
 dependency; there are no pip packages to install.
 
@@ -109,7 +115,10 @@ class; unknown models get a neutral halo. Classes are design metadata rather
 than benchmark scores and are independent of effort.
 
 `ACTIVE` marks the current model. `CLICK` previews another choice, `SAVING`
-waits for Codex, and `SET <effort>` confirms the acknowledged setting. The bottom
+waits for Codex, and `SELECTED` confirms the acknowledged setting. The bottom
 line counts down to cancellation; long titles page through in full. START is
 paused while browsing or saving. Updated installations need the new animation
 assets uploaded once before using `--no-upload`.
+
+Model confirmation lasts 1.3 seconds. On the normal dashboard, the model/effort
+label keeps the selected model’s color from the picker.
