@@ -87,7 +87,10 @@ Semantics:
 
 `GET /status` returns the same normalized shape (what the renderer and
 the on-device app consume), plus `week_progress_pct` and quota age. Reaching
-`resets_at` or `valid_until` clears that window's `left_pct` to null; the daemon
+`resets_at` clears that window's `left_pct` to null. `valid_until` marks data
+freshness; when a reset is known, the last confirmed value remains visible as
+cached until that reset. For windows without a reset, `valid_until` still
+provides a bounded display lifetime. The daemon
 never invents a replenished quota or advances the reset by seven days.
 `GET /health` lists all live sessions.
 

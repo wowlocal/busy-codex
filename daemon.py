@@ -957,8 +957,14 @@ def parse_quotas(value):
 
 
 def quota_expired(quota, now):
-    return any(finite_number(quota.get(key)) and quota[key] <= now
-               for key in ("resets_at", "valid_until"))
+    # Keep the last confirmed account value until its actual reset.
+    # ``valid_until`` marks freshness and remains the display bound only when
+    # a source does not provide a reset time.
+    reset = quota.get("resets_at")
+    if finite_number(reset):
+        return reset <= now
+    valid_until = quota.get("valid_until")
+    return finite_number(valid_until) and valid_until <= now
 
 
 def weekly_quota(quotas):
@@ -1310,7 +1316,8 @@ def info_elements(status: dict, astra: dict | None = None) -> list[dict]:
 
     if weekly and weekly.get("left_pct") is not None and not quota_expired(weekly, time.time()):
         left = max(0.0, min(100.0, float(weekly["left_pct"])))
-        color = quota_bar_color(left)
+        cached = (status.get("quota_status") or {}).get("state") == "cached"
+        color = QUOTA_COLOR if cached else quota_bar_color(left)
         fill = max(1, min(QUOTA_BAR_W, round(QUOTA_BAR_W * left / 100)))
         elements.append(_text("usage", 3, 15, "bottom_left", "W", color))
         elements.append(_rect("qtrack", QUOTA_BAR_X, QUOTA_BAR_Y,

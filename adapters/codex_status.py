@@ -282,7 +282,9 @@ def main():
             usage = monitor.snapshot()
         _emit(verbose, usage)
         return
-    monitor = codex_usage.Monitor(report.ENV)
+    monitor = codex_usage.Monitor(
+        report.ENV, logger=lambda message: print(f'[{time.strftime("%H:%M:%S")}] {message}',
+                                                 flush=True))
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())

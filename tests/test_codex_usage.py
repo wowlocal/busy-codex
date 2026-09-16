@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import queue
 import tempfile
 import threading
 import unittest
@@ -38,11 +39,12 @@ class AccountUsageTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             usage.account_quotas({'rateLimits': legacy_other}, 1000)
 
-    def test_failed_refresh_has_bounded_grace_and_recovers(self):
+    def test_failed_refresh_retains_known_window_until_reset_and_recovers(self):
         now = [1000]
+        messages = []
         results = mock.Mock(side_effect=[{'rateLimits': bucket()},
                                        OSError('offline'), {'rateLimits': bucket(42)}])
-        monitor = usage.Monitor(fetch=results, clock=lambda: now[0])
+        monitor = usage.Monitor(fetch=results, clock=lambda: now[0], logger=messages.append)
         monitor.refresh()
         self.assertEqual('fresh', monitor.snapshot()['quota_status']['state'])
         now[0] += 60
@@ -51,10 +53,33 @@ class AccountUsageTest(unittest.TestCase):
         self.assertEqual(1000, monitor.snapshot()['quotas'][0]['observed_at'])
         self.assertEqual(15, monitor.next_delay())
         now[0] = 1180
-        self.assertEqual('unavailable', monitor.snapshot()['quota_status']['state'])
+        self.assertEqual('cached', monitor.snapshot()['quota_status']['state'])
+        self.assertEqual(62, monitor.snapshot()['quotas'][0]['left_pct'])
         monitor.refresh()
         self.assertEqual('fresh', monitor.snapshot()['quota_status']['state'])
         self.assertEqual(58, monitor.snapshot()['quotas'][0]['left_pct'])
+        self.assertIn('Codex quota refresh failed: offline', messages[0])
+        self.assertEqual('Codex quota refresh recovered', messages[1])
+
+    def test_cached_window_becomes_unavailable_only_at_reset(self):
+        now = [1000]
+        monitor = usage.Monitor(fetch=mock.Mock(side_effect=[
+            {'rateLimits': bucket(reset=1200)}, OSError('offline')]),
+            clock=lambda: now[0])
+        monitor.refresh()
+        monitor.refresh()
+        now[0] = 1199
+        self.assertEqual('cached', monitor.snapshot()['quota_status']['state'])
+        now[0] = 1200
+        self.assertEqual('unavailable', monitor.snapshot()['quota_status']['state'])
+
+    def test_window_without_reset_still_uses_bounded_freshness(self):
+        now = [1000]
+        monitor = usage.Monitor(fetch=lambda _: {'rateLimits': bucket(reset=None)},
+                                clock=lambda: now[0])
+        monitor.refresh()
+        now[0] = 1180
+        self.assertEqual('unavailable', monitor.snapshot()['quota_status']['state'])
 
     def test_reset_schedules_early_refresh_without_inventing_new_window(self):
         now = [1000]
@@ -87,6 +112,20 @@ class AccountUsageTest(unittest.TestCase):
             stop.set()
             with self.assertRaises(InterruptedError):
                 usage.read_rate_limits(env, stop)
+
+    def test_each_stdio_request_gets_its_own_timeout_budget(self):
+        replies = queue.Queue()
+        replies.put({'id': 1, 'result': {}})
+        replies.put({'id': 2, 'result': {}})
+        sent = []
+        # The second request starts after the first request's original
+        # deadline. It still succeeds because it receives a new budget.
+        clock = mock.Mock(side_effect=[0, 7, 10, 17])
+        self.assertEqual({}, usage.request(replies, sent.append, 1, 'initialize',
+                                           timeout=8, clock=clock))
+        self.assertEqual({}, usage.request(replies, sent.append, 2, 'account/read',
+                                           timeout=8, clock=clock))
+        self.assertEqual(['initialize', 'account/read'], [item['method'] for item in sent])
 
 
 if __name__ == '__main__':

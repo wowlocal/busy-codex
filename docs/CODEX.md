@@ -190,7 +190,7 @@ Use port **8765** for the service installation, or your custom `--port`.
 | CLI control reports an error | Restart with the updated fork, verify native control is enabled and inspect `codex_effort.error`. Fast needs `fast/set`. |
 | A change feels slow | `codex_effort.confirmation_ms` measures time to acknowledgement; `display_ms` includes successful device submission. Neither includes the matrix's frame interval. |
 | Speed looks wrong | `codex_effort.fast` and `service_tier` are the current confirmed values. |
-| Weekly gauges show `?` | In `/status`, inspect `quota_status`, `observed_at`, `valid_until` and the quota window duration/reset. Check the installed Codex login. |
+| Weekly gauges show `?` | In `/status`, inspect `quota_status`, `observed_at`, `valid_until` and the quota window duration/reset. The last confirmed value survives transient timeouts until reset and turns gray while cached; `?` means no pre-reset value is known. Check the installed Codex login. |
 | No device connection | Inspect device health in `/hub`, USB/Wi-Fi connectivity, the host address and `BUSYBAR_TOKEN` for an authenticated Wi-Fi API. |
 
 For a one-off quota refresh, use

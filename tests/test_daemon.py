@@ -40,7 +40,7 @@ class WeekProgressTest(unittest.TestCase):
         self.assertIsNone(daemon.week_progress_pct(short, 1_000_000))
         self.assertIsNone(daemon.weekly_quota([{**short, 'name': '7d'}]))
 
-    def test_expired_data_never_becomes_a_full_quota(self):
+    def test_passed_reset_clears_quota_but_stale_prereset_value_survives(self):
         store = daemon.Store()
         store.report('test', 'a', {'state': 'WORKING', 'quotas': [
             {'name': '7d', 'left_pct': 12, 'resets_at': 99},
@@ -49,8 +49,29 @@ class WeekProgressTest(unittest.TestCase):
              mock.patch.object(daemon, 'EFFORT_CONTROLLER', None), \
              mock.patch.object(daemon.time, 'time', return_value=100):
             snapshot = daemon.status_snapshot()
-        self.assertEqual([None, None], [q['left_pct'] for q in snapshot['quotas']])
+        self.assertEqual([None, 30], [q['left_pct'] for q in snapshot['quotas']])
         self.assertIsNone(snapshot['week_progress_pct'])
+
+    def test_stale_known_quota_remains_visible_until_its_reset(self):
+        quota = {'name': '7d', 'left_pct': 61, 'window_minutes': 10080,
+                 'resets_at': 2000, 'observed_at': 1000, 'valid_until': 1180}
+        self.assertFalse(daemon.quota_expired(quota, 1500))
+        self.assertEqual(61, daemon.weekly_quota([quota])['left_pct'])
+        self.assertTrue(daemon.quota_expired(quota, 2000))
+        no_reset = {**quota, 'resets_at': None}
+        self.assertTrue(daemon.quota_expired(no_reset, 1180))
+
+    def test_cached_quota_keeps_its_fill_but_uses_stale_color(self):
+        status = {'state': 'IDLE', 'quota_status': {'state': 'cached'}, 'quotas': [{
+            'name': '7d', 'left_pct': 61, 'window_minutes': 10080,
+            'resets_at': 2_000_000}]}
+        with mock.patch.object(daemon.time, 'time', return_value=1_000_000):
+            elements = daemon.info_elements(status)
+        usage = next(e for e in elements if e['id'] == 'usage')
+        fill = next(e for e in elements if e['id'] == 'qfill')
+        self.assertEqual(('W', daemon.QUOTA_COLOR), (usage['text'], usage['color']))
+        self.assertEqual([daemon.QUOTA_COLOR], fill['fill_colors'])
+        self.assertGreater(fill['width'], 1)
 
     def test_progress_fill_is_cleared_on_reset_missing_data_and_zero_progress(self):
         now = 1_000_000
