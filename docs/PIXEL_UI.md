@@ -88,12 +88,19 @@ places the dynamic title, action, class marks and timeout over those assets.
 Background and text use separate draw-cache groups, so updating the countdown
 does not restart the orbit. The animation keepalive is a multiple of its loop.
 Both the gallery builder and `install_effort_anims.py` include all model assets.
+GPT-6 portraits occupy the left 16×13 pixels, with no motion behind the text:
+Astra's two spiral arms rotate around a warm core; Sol's flame tongues flicker
+with rising embers; Luna's crescent bobs gently with a traveling glint and star.
+Their `model_v2_*` files coexist with the unchanged `model_v1_*` legacy profiles.
 
 Export a contact sheet and a browse/save/confirm walkthrough:
 
 ```sh
 python3 preview_models.py --out /tmp/model-preview
 ```
+
+The export includes `gpt6-models.gif` for the new trio and `gpt6-phases.png`
+for inspecting four points around each animation loop.
 
 Pillow is only required for export. Effects use the exact production frames;
 the preview’s 3×5 text approximates the firmware’s built-in font. Confirm text

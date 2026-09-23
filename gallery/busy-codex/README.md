@@ -108,9 +108,10 @@ Existing builds without that endpoint continue to support effort and Fast.
 Desktop controls require a sent task; unsent drafts are not exposed by its IPC.
 
 
-The picker uses native animated model cards: Luna has a mint orbit, Terra blue
-orbital planes, Sol a violet braid, and Astra a pink stellar core. Spark is
-amber and GPT-5.5 periwinkle. Four small marks indicate the explicit visual
+The picker uses native animated model cards. GPT-6 Astra has a violet spiral
+galaxy, Sol an orange flame with embers, and Luna a golden crescent with a
+drifting star. GPT-5.6 retains its mint Luna orbit, blue Terra planes and violet
+Sol braid. Spark is amber and GPT-5.5 periwinkle. Four small marks indicate the explicit visual
 class; unknown models get a neutral halo. Classes are design metadata rather
 than benchmark scores and are independent of effort.
 

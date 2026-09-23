@@ -55,9 +55,10 @@ def card(menu, index):
                         if bit == '1':
                             draw.point((x + dx, e['y'] + y + 1), fill=e['color'])
                 x += daemon.est_width(c)
-    if menu.get('phase') == 'confirmed' and index < 20:
+    confirmed = menu.get('phase') == 'confirmed'
+    if menu.get('phase', 'browse') != 'saving' and index < (20 if confirmed else 8):
         image = Image.alpha_composite(image, Image.frombytes('RGBA', (72, 16),
-            animation.transition_frame(key, index, confirmed=True), 'raw', 'BGRA'))
+            animation.transition_frame(key, index, menu.get('direction', 1), confirmed), 'raw', 'BGRA'))
     return image.convert('RGB')
 
 
@@ -65,7 +66,8 @@ def export(output, scale=8):
     from PIL import Image
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    models = ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-6-astra',
+    models = ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna',
+              'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol',
               'gpt-5.3-codex-spark', 'gpt-5.5', 'gpt-reserve']
     menus = [dict(model=model, index=i, count=len(models), changed_at=0, until=12,
                   active=i == 1) for i, model in enumerate(models)]
@@ -85,10 +87,18 @@ def export(output, scale=8):
               for i in range(animation.FRAMES)]
     frames[0].save(output / 'model-cards.gif', save_all=True, append_images=frames[1:],
                    duration=40, loop=0, optimize=True, disposal=1)
+    # New-generation trio, plus a temporal contact sheet for loop inspection.
+    trio = [frame.crop((0, 0, 72 * scale, 58 * scale)) for frame in frames]
+    trio[0].save(output / 'gpt6-models.gif', save_all=True, append_images=trio[1:],
+                 duration=40, loop=0, optimize=True, disposal=1)
+    phases = Image.new('RGB', (72 * 4 * scale, 58 * scale))
+    for column, index in enumerate((0, 18, 37, 56)):
+        phases.paste(sheet(index).crop((0, 0, 72 * scale, 58 * scale)), (column * 72 * scale, 0))
+    phases.save(output / 'gpt6-phases.png')
     # A single-card walkthrough: browse -> wait for Codex -> acknowledged model.
     walkthrough = []
-    for i, phase in enumerate(('browse', 'browse', 'browse', 'browse', 'saving', 'confirmed')):
-        menu = dict(menus[min(i, 3)], phase=phase, effort='HIGH')
+    for i, phase in enumerate(('browse', 'browse', 'browse', 'saving', 'confirmed')):
+        menu = dict(menus[min(i, 2)], phase=phase, effort='HIGH')
         for f in range(round(CONFIRMATION_S * animation.FPS) if phase == 'confirmed' else 45):
             image = card(menu, f).resize((72 * scale, 16 * scale), Image.Resampling.NEAREST)
             walkthrough.append(image.quantize(palette=palette, dither=Image.Dither.NONE))

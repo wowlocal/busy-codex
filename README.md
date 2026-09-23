@@ -32,9 +32,11 @@ requests. After 12 seconds without input, the picker closes without applying.
 Back also cancels, but the firmware may exit the app at the same time.
 CLI model selection requires a fork build with the native `model/set` endpoint.
 
-The picker shows a live model card at 25 fps: mint orbits for Luna, blue orbital
-planes for Terra, a violet braid for Sol, and a pink stellar core for Astra.
-Spark has an amber orbit; GPT-5.5 uses periwinkle. Four small marks show the
+The picker shows live model cards at 25 fps. GPT-6 Astra has a violet spiral
+galaxy, GPT-6 Sol an orange flame with rising embers, and GPT-6 Luna a golden
+crescent with a drifting star. Their silhouettes, motion and transition effects
+are distinct. GPT-5.6 keeps its mint Luna orbit, blue Terra planes and violet
+Sol braid; Spark has an amber orbit and GPT-5.5 uses periwinkle. Four small marks show the
 model’s visual class; unknown models use a neutral halo with no class assigned.
 `ACTIVE` marks the current model, `CLICK` invites confirmation, and the bottom
 line counts down to cancellation. `SAVING` becomes `SELECTED` only after
@@ -44,6 +46,8 @@ word separately using the effort animation palette.
 
 These classes are editable design metadata, not benchmark scores or reasoning
 effort. Long names page through in full. See the [model picker preview](docs/img/model-picker.gif).
+
+![GPT-6 Astra, Sol and Luna model cards](docs/img/gpt6-models.gif)
 
 Changes apply to subsequent turns and preserve Plan mode. They leave a running answer alone and do not change global defaults.
 The label appears after Codex confirms the setting.

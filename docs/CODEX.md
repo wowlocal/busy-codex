@@ -214,12 +214,14 @@ to the selected model's default; Plan mode and global config are preserved.
 Unsent Desktop drafts still have no controllable thread.
 
 
-The model card uses native 25 fps animations independent of text updates. The
-left symbol gains complexity across four explicit visual classes: orbit,
-orbital planes, braid, stellar core. Each model profile has a stable palette;
-unknown IDs remain neutral. These are editorial classes, not measured scores,
-and do not change with effort. Extend `MODEL_PROFILES` in `model_animation.py`
-to map another model to a visual profile without changing control logic.
+The model card uses native 25 fps animations independent of text updates.
+GPT-6 has dedicated portraits: Astra's violet spiral galaxy, Sol's orange
+flame and rising embers, and Luna's golden crescent and drifting star. Their
+motion and edge transitions differ; GPT-5.6 Sol/Luna retain their earlier
+braid/orbit profiles. The dashboard inherits each model's accent.
+Unknown IDs remain neutral. Class marks are editorial design metadata, not
+measured scores, and do not change with effort. Extend `MODEL_PROFILES` in
+`model_animation.py` to map another model without changing control logic.
 
 The counter is catalog position, the four marks under the symbol are model
 class, and the bottom line is the 12-second inactivity timeout. `ACTIVE` marks
@@ -233,6 +235,8 @@ names page every 1.5 seconds instead of losing their distinguishing suffix.
 or confirmed feedback. Opening the picker, cancelling, losing focus or timing
 out never applies a preview. Rebuild and upload the new model assets when
 updating an existing installation; `--no-upload` cannot add these assets.
+GPT-6 portraits use `model_v2_*` assets so older cached backgrounds cannot be
+mistaken for the new artwork. Run `./install.sh` to build and upload them.
 
 The normal dashboard colors the model name with the picker palette and the
 effort word with its own effort animation accent. Color follows confirmed settings (including the retained hidden

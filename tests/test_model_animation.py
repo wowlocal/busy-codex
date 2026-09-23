@@ -51,6 +51,30 @@ class ModelAnimationTests(unittest.TestCase):
                             self.assertLessEqual(e['y'] + e['height'], 16)
                 self.assertEqual(animation.label(model), ''.join(daemon.model_name_pages(menu)))
 
+    def test_generation_six_has_distinct_portraits_and_keeps_legacy_profiles(self):
+        models = ('gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna')
+        keys = [animation.profile_key(model) for model in models]
+        self.assertEqual(['galaxy', 'flame', 'moon'], [animation.PROFILES[k].motif for k in keys])
+        self.assertEqual(3, len({animation.model_color(model) for model in models}))
+        for key in keys:
+            self.assertTrue(animation.filename(key).startswith('model_v2_'))
+            # Motion is in the portrait itself, not just a colored border.
+            portraits = []
+            for index in (0, 18, 37, 56):
+                frame = animation.frame(key, index)
+                portraits.append(b''.join(frame[y * 72 * 4:(y * 72 + 16) * 4] for y in range(13)))
+            self.assertEqual(4, len(set(portraits)))
+            # Avoid a flash when the native loop wraps.
+            first, last = animation.frame(key, 0), animation.frame(key, 74)
+            seam = sum(abs(a - b) for a, b in zip(first, last))
+            steps = [sum(abs(a - b) for a, b in zip(animation.frame(key, i),
+                     animation.frame(key, i + 1))) for i in (17, 36, 55)]
+            self.assertLessEqual(seam, max(steps) * 2)
+        for model, key in (('gpt-5.6-sol', 'sol'), ('gpt-5.6-luna', 'luna')):
+            self.assertEqual(key, animation.profile_key(model))
+            self.assertFalse(animation.PROFILES[key].motif)
+            self.assertTrue(animation.filename(key).startswith('model_v1_'))
+
     def test_native_orbit_is_not_restarted_by_countdown_or_label_pages(self):
         cache = DrawCache('test', 30)
         class Transport:
